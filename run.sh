@@ -1,4 +1,5 @@
 #/bin/bash
+export PYTHONPATH=.
 function terminate() {
   exit
 }
@@ -6,16 +7,16 @@ trap 'terminate' {1,2,3,15}
 
 accelerate launch --config_file=./pipeline/accelerate_configs/accelerate_config_fsdp.yaml \
 pipeline/train/instruction_following.py \
---pretrained_model_name_or_path=luodian/OTTER-MPT7B-Init \
---mimicit_path="./data/DC/DC_instruction.json" \
---images_path="./data/DC/DC.json" \
---train_config_path="./data/DC/DC_train.json" \
+--pretrained_model_name_or_path="./weights/OTTER-Image-MPT7B" \
+--mimicit_path="./data/SD/SD_instructions.json" \
+--images_path="./data/SD/SD.json" \
+--train_config_path="./data/SD/SD_train.json" \
 --batch_size=4 \
 --num_epochs=9 \
 --report_to_wandb \
---wandb_entity=ntu-slab \
---run_name=OTTER-LLaMA7B-densecaption \
---wandb_project=OTTER-LLaMA7B \
+--wandb_entity=katlab_otter \
+--run_name=OTTER-Image-MPT7B-SD \
+--wandb_project=OTTER-Image-MPT7B \
 --workers=1 \
 --lr_scheduler=cosine \
 --learning_rate=1e-5 \
