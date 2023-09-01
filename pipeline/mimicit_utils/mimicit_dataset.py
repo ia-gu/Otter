@@ -360,7 +360,8 @@ class MimicitDataset(Dataset):
 
         patch_images = patch_images.unsqueeze(0)
         instruction = self.pre_question(instruction)
-        answer = self.pre_answer(answer, self.max_tgt_length)
+        # answer = self.pre_answer(answer, self.max_tgt_length)
+        answer = self.pre_answer(answer)
         query_text = f"<image>User: {instruction} GPT:<answer> {answer}<|endofchunk|>"
         all_texts = f"{incontext_text}{query_text}"
         return patch_images, all_texts
@@ -492,7 +493,7 @@ class MimicitDataset(Dataset):
             patch_images, all_texts = self.process_llava(instruction_id, instruction, answer, image_ids, in_context_example_ids, inst_format=inst_format)
         elif cur_train_id.upper().startswith("SD") or cur_train_id.startswith("CGD"):
             patch_images, all_texts = self.process_spot_the_difference(
-                instruction_id, instruction, answer, image_ids, in_context_example_ids, inst_format=inst_format
+                instruction_id, instruction, answer, image_ids, in_context_example_ids
             )
         elif cur_train_id.upper().startswith("SN"):
             patch_images, all_texts = self.process_scene_navigation(
