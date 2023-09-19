@@ -98,7 +98,13 @@ class MimicitDataset(Dataset):
         self.images_paths = images_paths if images_paths != "" else [""] * len(mimicit_paths)
         self.train_config_paths = train_config_paths if train_config_paths != "" else [""] * len(mimicit_paths)
         self.status_list = status_list
+        
+        # print(self.mimicit_paths)
+        # print(self.images_paths)
+        # print(self.train_config_paths)
+        # print(self.status_list)
 
+        # print(print(f'len(self.mimicit_paths): {len(self.mimicit_paths)}'))
         assert len(self.mimicit_paths) == len(self.images_paths) == len(self.train_config_paths) == len(self.status_list), f"metas do not have same number"
 
         self.dataset = {}
@@ -106,7 +112,7 @@ class MimicitDataset(Dataset):
         self.train_data_list = []
         self.train_config = []
         self.task_name = args.task_name
-
+        # print(self.train_config_paths) # ['./data/LA/LACR_I2I_train.json']
         for (
             cur_mimicit_path,
             cur_images_path,
@@ -143,14 +149,15 @@ class MimicitDataset(Dataset):
                 random.shuffle(cache_train_list)
                 cache_train_list = cache_train_list[: int(len(cache_train_list) * args.past_subset_ration)]
             if self.train_data_list == []:
-                self.train_data_list = cache_train_list
+                self.train_data_list = cache_train_list[:] # ??
                 self.train_config = cache_train_config
             else:
-                self.train_data_list += cache_train_list
+                self.train_data_list += cache_train_list[:10000] # ??
                 self.train_config.update(cache_train_config)
             del cache_train_config
             del cache_train_list
-
+            # print(cache_train_list[:2]) # ['LACR_I2I_INS_000000215677', 'LACR_I2I_INS_000000296754']
+        
         self.bos_item = torch.LongTensor([args.tokenizer.bos_token_id])
         self.eos_item = torch.LongTensor([args.tokenizer.eos_token_id])
         self.bos_mask = torch.LongTensor([1])
@@ -472,6 +479,13 @@ class MimicitDataset(Dataset):
     def process_image_text_pair(self, index):
         # try:
         cur_train_id = self.train_data_list[index]
+        cur_train_id_for_ins = cur_train_id.split("=")[0]
+        # print(f"cur_train_id: {cur_train_id}")
+        # print(f"cur_train_id_for_ins: {cur_train_id_for_ins}")
+        # print(f"instruction: {self.dataset[cur_train_id_for_ins]['instruction']}")
+        # print(f"answer: {self.dataset[cur_train_id_for_ins]['answer']}")
+        # print(f"image_ids: {self.dataset[cur_train_id_for_ins]['image_ids']}")
+        # print(f"in_context_example_ids: {self.train_config[cur_train_id]}")
         (
             instruction_id,
             instruction,
@@ -479,17 +493,17 @@ class MimicitDataset(Dataset):
             image_ids,
             in_context_example_ids,
         ) = (
-            cur_train_id,
-            self.dataset[cur_train_id]["instruction"],
-            self.dataset[cur_train_id]["answer"],
-            self.dataset[cur_train_id]["image_ids"],
+            cur_train_id_for_ins,
+            self.dataset[cur_train_id_for_ins]["instruction"],
+            self.dataset[cur_train_id_for_ins]["answer"],
+            self.dataset[cur_train_id_for_ins]["image_ids"],
             self.train_config[cur_train_id],
         )
         inst_format = self.inst_format
         resample_frames = self.resample_frames
         # self.max_src_length = self.max_tgt_length = 256
-
-        if cur_train_id.upper().startswith("LA"):
+        
+        if cur_train_id.upper().startswith("LA") or cur_train_id.count("+") == 2:
             patch_images, all_texts = self.process_llava(instruction_id, instruction, answer, image_ids, in_context_example_ids, inst_format=inst_format)
         elif cur_train_id.upper().startswith("SD") or cur_train_id.startswith("CGD"):
             patch_images, all_texts = self.process_spot_the_difference(
@@ -561,7 +575,6 @@ class MimicitDataset(Dataset):
         samples_v1 = []  # containing image-text pairs
         for sample_tuple in samples:
             samples_v1.append(sample_tuple)
-
         res_v1 = collate_fn(
             samples_v1,
             pad_idx=self.tokenizer.pad_token_id,
@@ -574,6 +587,7 @@ def collate_fn(samples, pad_idx, eos_idx):
     if len(samples) == 0:
         return {}
 
+    # print(samples.shape)
     def merge(key, pad_idx, pading_size=None):
         res = collate_tokens(
             [s[key] for s in samples],

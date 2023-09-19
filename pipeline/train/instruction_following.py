@@ -54,7 +54,7 @@ def random_seed(seed=42, rank=0):
 
 
 def train_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, lr_scheduler, device_id, accelerator, wandb):
-    num_batches_per_epoch = len(mimicit_loaders[0])
+    num_batches_per_epoch = len(mimicit_loaders[0]) # データ数/バッチサイズ
     total_training_steps = num_batches_per_epoch * args.num_epochs
 
     # special design for Idefics Model's prompt strategy
@@ -91,6 +91,8 @@ def train_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, l
         #### MIMIC-IT FORWARD PASS ####
 
         total_losses = []
+        # print("####################################")
+        # print(batch_mimicits.shape)
         for batch_mimicit in batch_mimicits:
             images = batch_mimicit["net_input"]["patch_images"].to(device_id, non_blocking=True)
             input_ids = batch_mimicit["net_input"]["input_ids"].to(device_id, non_blocking=True)
@@ -420,7 +422,7 @@ def parse_args():
     parser.add_argument(
         "--past_subset_ration",
         type=float,
-        default=1.0,
+        default=1,
         help="The ratio for resampling the past dataset. Should be a float between 0 and 1.",
     )
 
@@ -687,7 +689,7 @@ def main():
     optimizer = torch.optim.AdamW(get_grouped_params(model), lr=args.learning_rate)
 
     if args.rank == 0:
-        print(f"Total training steps: {total_training_steps}")
+        print(f"Total training steps: {total_training_steps}") # データ数/バッチサイズ
 
     args.warmup_steps = total_training_steps * args.warmup_steps_ratio if args.warmup_steps_ratio is not None else args.warmup_stepsps
 
@@ -725,6 +727,7 @@ def main():
         for cur_data_loader in mimicit_loaders:
             cur_data_loader.dataset.set_epoch(epoch)
 
+        start = time.time()
         train_one_epoch(
             args=args,
             model=model,
@@ -737,6 +740,11 @@ def main():
             device_id=device_id,
             wandb=wandb,
         )
+        end = time.time() - start
+        end_mins = int(end / 60)
+        end_secs = int(end - (end_mins * 60))
+        print(f"Training Time: {end_mins}m {end_secs}s")
+        
         accelerator.wait_for_everyone()
 
         if args.save_ckpt_each_epoch:
@@ -827,7 +835,6 @@ def main():
                 unwrapped_model.save_pretrained(f"{args.external_save_dir}")
 
     accelerator.wait_for_everyone()
-
 
 if __name__ == "__main__":
     main()

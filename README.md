@@ -42,10 +42,22 @@ cd Otter
 # Install dependencies: 
 conda deactivate
 conda env create -f environment.yml
-pip install -r requirements.txt
+pip install -r requirements_otter.txt
 
 cd pipeline/demo
 Launch otter_image.ipynb
+```
+
+### ファインチューニング
+※wandbのアカウントを作成し、エンティティ、プロジェクトを以下の引数に指定
+```
+--wandb_entity=your_entity
+--wandb_project=your_project
+```
+pythonプログラムは"./pipeline/train/instruction_following.py"<br>
+バッシュファイルの中身を適宜変更<br>
+```
+bash run_VI.sh
 ```
 
 [Project Page](https://otter-ntu.github.io/) | [Otter Paper](https://arxiv.org/abs/2305.03726) | [MIMIC-IT Paper](https://arxiv.org/abs/2306.05425) | [MIMIC-IT Dataset](mimic-it/README.md)

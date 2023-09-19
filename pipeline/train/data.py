@@ -646,6 +646,7 @@ def get_mimicit_dataset(args, image_processor, tokenizer, epoch=0, floor=False):
     ImageFile.LOAD_TRUNCATED_IMAGES = True
     args.task = "pretrain"
     args.tokenizer = tokenizer
+    # print(f'tokenizer: {tokenizer}')
     unified_datasets = []
     # processing for image-text in-context datasets
     if args.mimicit_ic_path != "":
@@ -666,16 +667,23 @@ def get_mimicit_dataset(args, image_processor, tokenizer, epoch=0, floor=False):
             ic_status = ["new"] * len(args.mimicit_ic_path.split(","))
         unified_dataset = MimicitDataset(args, all_mimicit_ic_path, all_images_ic_path, all_train_config_ic_path, status_list=ic_status)
         unified_datasets.append(unified_dataset)
+    # print(all_mimicit_ic_path)
+    # print(all_images_ic_path)
+    # print(all_train_config_ic_path)
+    # print(ic_status)
 
     # processing for image-text datasets
     if args.mimicit_path != "":
         all_mimicit_path = args.mimicit_path.split(",") + args.past_mimicit_path.split(",") if args.past_mimicit_path != "" else args.mimicit_path.split(",")
+        # print(print(f'all_mimicit_path: {all_mimicit_path}'))
         all_images_path = args.images_path.split(",") + args.past_images_path.split(",") if args.past_images_path != "" else args.images_path.split(",")
+        # print(print(f'all_images_path: {all_images_path}'))
         all_train_config_path = (
             args.train_config_path.split(",") + args.past_train_config_path.split(",")
             if args.past_train_config_path != ""
             else args.train_config_path.split(",")
         )
+        # print(print(f'all_train_config_path: {all_train_config_path}'))
         if args.past_mimicit_path != "":
             status = ["new"] * len(args.mimicit_path.split(",")) + ["past"] * len(args.past_mimicit_path.split(","))
         else:
@@ -728,11 +736,14 @@ def get_mimicit_dataset(args, image_processor, tokenizer, epoch=0, floor=False):
     global_batch_size = args.batch_size * args.world_size
 
     num_samples = args.train_num_samples  # 8
+    # print(num_samples) # 8007(SD_train.jsonÇÃùî)
     num_batches = round_fn(num_samples / global_batch_size)  # 2
+    # print(num_batches) # 2002(SD)
     # args.workers = max(1, args.workers)  # 1
     # num_worker_batches = round_fn(num_batches / args.workers)  # per dataloader worker #2
     # num_batches = num_worker_batches * args.workers  # 2
     num_samples = num_batches * global_batch_size  # 8
+    # print(num_samples) # 8008(SD)
 
     dataloaders = []
 
