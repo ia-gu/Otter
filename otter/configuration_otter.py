@@ -80,6 +80,8 @@ class OtterConfig(PretrainedConfig):
             self.text_config = CONFIG_MAPPING[text_config.pop("model_type")](**text_config)
         self.cross_attn_every_n_layers = cross_attn_every_n_layers
         self.use_media_placement_augmentation = use_media_placement_augmentation
+        # import pdb
+        # pdb.set_trace()
 
     def to_dict(self):
         """

@@ -38,7 +38,6 @@ from transformers.models.clip.configuration_clip import (
 
 import xformers.ops as xops
 
-import numpy as np
 
 logger = logging.get_logger(__name__)
 
@@ -70,22 +69,6 @@ class CLIPVisionEmbeddings(nn.Module):
         self.num_positions = self.num_patches + 1
         self.position_embedding = nn.Embedding(self.num_positions, self.embed_dim)
         self.register_buffer("position_ids", torch.arange(self.num_positions).expand((1, -1)))
-
-        self.hook_counter = 0
-        self.hook_norm = np.array([])
-        def hook_fn(module, grad_input, grad_output):
-            self.hook_counter += 1
-            for i in module.parameters():
-                self.hook_norm = np.append(self.hook_norm, (grad_output[0].norm().item())/i.numel())
-            if self.hook_counter >= 10:
-                # print('grad_input: ', grad_input)
-                # print('grad_input_sum: ', torch.sum(grad_input[0]))
-                # print('grad_output: ', grad_output)
-                # print(self.hook_norm)
-                print('clip position embedding', np.sum(self.hook_norm))
-                self.hook_counter = 0
-                self.hook_norm = np.array([])
-        self.position_embedding.register_full_backward_hook(hook_fn)
 
     def forward(self, pixel_values: torch.FloatTensor) -> torch.Tensor:
         batch_size = pixel_values.shape[0]
@@ -474,23 +457,6 @@ class CLIPVisionModel(CLIPPreTrainedModel):
     def __init__(self, config: CLIPVisionConfig):
         super().__init__(config)
         self.vision_model = CLIPVisionTransformer(config)
-
-        # self.hook_counter = 0
-        # self.hook_norm = np.array([])
-        # def hook_fn(module, grad_input, grad_output):
-        #     self.hook_counter += 1
-        #     for i in module.parameters():
-        #         self.hook_norm = np.append(self.hook_norm, (grad_output[0].norm().item())/i.numel())
-        #     if self.hook_counter >= 10:
-        #         # print('grad_input: ', grad_input)
-        #         # print('grad_input_sum: ', torch.sum(grad_input[0]))
-        #         # print('grad_output: ', grad_output)
-        #         # print(self.hook_norm)
-        #         print('clip vision model', np.sum(self.hook_norm))
-        #         self.hook_counter = 0
-        #         self.hook_norm = np.array([])
-        # self.vision_model.register_full_backward_hook(hook_fn)
-
         # Initialize weights and apply final processing
         self.post_init()
 

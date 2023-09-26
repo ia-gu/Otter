@@ -249,6 +249,170 @@ def train_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, l
         if ((num_steps + 1) % args.logging_steps == 0) and args.rank == 0:
             print(f"Step {num_steps+1}/{num_batches_per_epoch} of epoch {epoch+1}/{args.num_epochs} complete. Loss MIMIC-IT: {mean_loss.item():.3f}")
 
+def val_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, lr_scheduler, device_id, accelerator, wandb):
+    num_batches_per_epoch = len(mimicit_loaders[0]) # データ数/バッチサイズ
+    total_eval_steps = num_batches_per_epoch * args.num_epochs
+
+    # special design for Idefics Model's prompt strategy
+    fake_token_image_exists = True if "<fake_token_around_image>" in tokenizer.special_tokens_map["additional_special_tokens"] else False
+    fake_token_image_token_id = tokenizer("<fake_token_around_image>", add_special_tokens=False)["input_ids"][-1]
+
+    # normal prompt strategy
+    media_token_id = tokenizer("<image>", add_special_tokens=False)["input_ids"][-1]
+    endofchunk_text = (
+        "<|endofchunk|>" if "<|endofchunk|>" in tokenizer.special_tokens_map["additional_special_tokens"] else "<end_of_utterance>"
+    )  # for different tokenizer
+    endofchunk_token_id = tokenizer(endofchunk_text, add_special_tokens=False)["input_ids"][-1]
+    answer_token_id = tokenizer("<answer>", add_special_tokens=False)["input_ids"][-1]
+    ens_token_id = tokenizer(tokenizer.eos_token, add_special_tokens=False)["input_ids"][-1]
+
+    model.eval()
+
+    # setup logging
+    step_time_m = AverageMeter()  # time for one optimizer step (> 1 batch if using gradient accum)
+    data_time_m = AverageMeter()  # avg time to load one batch of both C4 AND laion (= 1 batch regardless of gradient accum)
+    end = time.time()
+    autocast_type = torch.bfloat16 if accelerator.mixed_precision == "bf16" else torch.float32
+
+    # loop through dataloader
+    for num_steps, (batch_mimicits) in tqdm(
+        enumerate(zip(*mimicit_loaders)),
+        disable=args.rank != 0,
+        total=total_eval_steps,
+        initial=(epoch * num_batches_per_epoch),
+    ):
+        data_time_m.update(time.time() - end)
+
+        global_step = num_steps + epoch * num_batches_per_epoch
+        #### MIMIC-IT FORWARD PASS ####
+
+        total_losses = []
+        # print("####################################")
+        # print(batch_mimicits.shape)
+        with torch.no_grad():
+            for batch_mimicit in batch_mimicits:
+                images = batch_mimicit["net_input"]["patch_images"].to(device_id, non_blocking=True)
+                input_ids = batch_mimicit["net_input"]["input_ids"].to(device_id, non_blocking=True)
+                attention_mask = batch_mimicit["net_input"]["attention_masks"].to(device_id, non_blocking=True)
+
+                labels = input_ids.clone()
+                labels[labels == tokenizer.pad_token_id] = -100
+                labels[:, 0] = -100
+                for i in range(labels.shape[0]):
+                    # get index of all endofchunk/media tokens in the sequence
+                    endofchunk_idxs = torch.where(labels[i] == endofchunk_token_id)[0]
+                    media_idxs = torch.where(labels[i] == media_token_id)[0]
+
+                    # remove loss for any token the before the first <answer>
+                    token_idx = 0
+                    while token_idx < labels.shape[1] and labels[i][token_idx] != answer_token_id:
+                        labels[i][token_idx] = -100
+                        token_idx += 1
+
+                    # remove loss for any token between <|endofchunk|> and <answer>, except <image>
+                    for endofchunk_idx in endofchunk_idxs[:-1]:
+                        token_idx = endofchunk_idx + 1
+                        while token_idx < labels.shape[1] and labels[i][token_idx] != answer_token_id:
+                            if labels[i][token_idx] == media_token_id:
+                                pass
+                            else:
+                                labels[i][token_idx] = -100
+                            token_idx += 1
+
+                labels[labels == answer_token_id] = -100
+                labels[labels == media_token_id] = -100
+                if fake_token_image_exists:
+                    labels[labels == fake_token_image_token_id] = -100
+
+                with accelerator.autocast():
+                    unwrapped_model = accelerator.unwrap_model(model)
+                    if num_steps == 0:
+                        # info check
+                        accelerator.print(f"input_ids: {input_ids.shape}")
+                        accelerator.print(f"images: {images.shape}")
+                        accelerator.print(f"attention_mask: {attention_mask.shape}")
+                        accelerator.print(f"labels: {labels.shape}")
+                        accelerator.print(f"model: {unwrapped_model.__class__.__name__}")
+                        accelerator.print(f"model dtype: {unwrapped_model.dtype}")
+
+                    if IdeficsForVisionText2Text is not None and isinstance(unwrapped_model, IdeficsForVisionText2Text):
+                        # only for image model
+                        max_num_images = images.shape[1]
+                        pure_text = torch.all(images == 0)
+                        image_attention_mask = get_image_attention_mask(input_ids, max_num_images, tokenizer, include_image=not pure_text)
+                        # assert images.shape[1] == 1, "The second dimension is not 1"
+
+                        loss_mimicit = model(
+                            pixel_values=images.squeeze(1).to(autocast_type),
+                            input_ids=input_ids,
+                            attention_mask=attention_mask,
+                            image_attention_mask=image_attention_mask,
+                            labels=labels,
+                        )[0]
+                    else:
+                        loss_mimicit = model(
+                            vision_x=images.to(autocast_type),
+                            lang_x=input_ids,
+                            attention_mask=attention_mask,
+                            labels=labels,
+                        )[0]
+
+                total_losses.append(loss_mimicit)
+        total_loss_sum = sum(total_losses)
+        mean_loss = total_loss_sum / len(total_losses)
+
+        # step time and reset end outside of rank 0
+        step_time_m.update(time.time() - end)
+        end = time.time()
+
+        if accelerator.sync_gradients:
+            if args.rank == 0 and args.report_to_wandb:
+                # compute within rank 0
+                mimicit_samples_per_second = args.gradient_accumulation_steps * args.batch_size * args.world_size / step_time_m.val
+                mimicit_samples_per_second_per_gpu = args.gradient_accumulation_steps * args.batch_size / step_time_m.val
+
+                wandb.log(
+                    {
+                        "val_data_time": data_time_m.avg,
+                        "val_step_time": step_time_m.avg,
+                        "val_mimicit_samples_per_second": mimicit_samples_per_second,
+                        "val_mimicit_samples_per_second_per_gpu": mimicit_samples_per_second_per_gpu,
+                        "val_lr": optimizer.param_groups[0]["lr"],
+                    },
+                    commit=False,
+                )
+                step_time_m.reset()
+                data_time_m.reset()
+
+                wandb.log(
+                    {
+                        "val_loss_mimicit": mean_loss.item(),
+                        "val_global_step": global_step // args.gradient_accumulation_steps,
+                    },
+                    commit=True,
+                )
+                # torch.cuda.empty_cache()
+                # gc.collect()  # forces garbage collection
+
+            if args.rank == 0 and global_step != 0 and (args.save_steps_interval != -1) and (global_step % args.save_steps_interval == 0):
+                if not os.path.exists(args.external_save_dir):
+                    os.makedirs(args.external_save_dir)
+
+                unwrapped_model = accelerator.unwrap_model(model)
+                checkpoint_dict = {
+                    "steps": global_step,
+                    "model_state_dict": get_checkpoint(unwrapped_model),
+                }
+                print(f"Saving checkpoint to {args.external_save_dir}/checkpoint_steps_{global_step}.pt")
+                accelerator.save(checkpoint_dict, f"{args.external_save_dir}/checkpoint_steps_{global_step}.pt")
+                if args.delete_previous_checkpoint:
+                    if epoch > 0 and os.path.exists(f"{args.external_save_dir}/checkpoint_step_{global_step-args.save_steps_interval}.pt"):
+                        os.remove(f"{args.external_save_dir}/checkpoint_step_{global_step-args.save_steps_interval}.pt")
+
+        # Log loss to console
+        if ((num_steps + 1) % args.logging_steps == 0) and args.rank == 0:
+            print(f"Step {num_steps+1}/{num_batches_per_epoch} of epoch {epoch+1}/{args.num_epochs} complete. Loss MIMIC-IT: {mean_loss.item():.3f}")
+
 
 def parse_args():
     """
@@ -256,290 +420,77 @@ def parse_args():
     :return: Parsed arguments
     """
     parser = argparse.ArgumentParser(description="Main training script for the model")
-
-    # Add arguments to the parser
-    # TODO: Add help messages to clarify the purpose of each argument
-
-    # Model configuration arguments
-    parser.add_argument(
-        "--external_save_dir",
-        type=str,
-        default=None,
-        help="set to save model to external path",
-    )
-    parser.add_argument(
-        "--run_name",
-        type=str,
-        default="otter-9b",
-        help="used to name saving directory and wandb run",
-    )
-    parser.add_argument(
-        "--model_name",
-        type=str,
-        default="otter",
-        choices=["otter", "flamingo", "idefics"],
-        help="otters or flamingo",
-    )
-    parser.add_argument(
-        "--inst_format",
-        type=str,
-        default="simple",
-        choices=["simple", "llama2", "idefics"],
-        help="simple is for mpt/llama1, rest are in different instruction templates.",
-    )
-    # Prepare the arguments for different types of data sources.
-    # Arguments are grouped by data types and whether the data is from past or new sources.
-    # Arguments for image-text data, including multi-run conversations.
-    parser.add_argument(
-        "--past_mimicit_path",
-        type=str,
-        default="",
-        help="Path to the past image-text dataset (including multi-run conversations). Should be in format /path/to/xx_instruction.json",
-    )
-    parser.add_argument(
-        "--past_images_path",
-        type=str,
-        default="",
-        help="Path to the past images dataset (including base64 format images). Should be in format /path/to/xx.json",
-    )
-    parser.add_argument(
-        "--past_train_config_path",
-        type=str,
-        default="",
-        help="Path to the past images dataset (including current ids and related in-context ids). Should be in format /path/to/xx_train.json",
-    )
-
-    parser.add_argument(
-        "--mimicit_path",
-        type=str,
-        default="",
-        help="Path to the new image-text dataset (including multi-run conversations). Should be in format /path/to/xx_instruction.json",
-    )
-    parser.add_argument(
-        "--images_path",
-        type=str,
-        default="",
-        help="Path to the new images dataset (including base64 format images). Should be in format /path/to/xx.json",
-    )
-    parser.add_argument(
-        "--train_config_path",
-        type=str,
-        default="",
-        help="Path to the new images dataset (including current ids and related in-context ids). Should be in format /path/to/xx_train.json",
-    )
-
-    # Arguments for image-text in-context data.
-    parser.add_argument(
-        "--past_mimicit_ic_path",
-        type=str,
-        default="",
-        help="Path to the past in-context image-text dataset. Should be in format /path/to/xx_instruction.json",
-    )
-    parser.add_argument(
-        "--past_images_ic_path",
-        type=str,
-        default="",
-        help="Path to the past in-context images dataset. Should be in format /path/to/xx.json",
-    )
-    parser.add_argument(
-        "--past_train_config_ic_path",
-        type=str,
-        default="",
-        help="Path to the past in-context training config dataset. Should be in format /path/to/xx_train.json",
-    )
-    parser.add_argument(
-        "--mimicit_ic_path",
-        type=str,
-        default="",
-        help="Path to the new in-context image-text dataset. Should be in format /path/to/xx_instruction.json",
-    )
-    parser.add_argument(
-        "--images_ic_path",
-        type=str,
-        default="",
-        help="Path to the new in-context images dataset. Should be in format /path/to/xx.json",
-    )
-    parser.add_argument(
-        "--train_config_ic_path",
-        type=str,
-        default="",
-        help="Path to the new in-context training config dataset. Should be in format /path/to/xx_train.json",
-    )
-
-    # Arguments for text data, including multi-run conversations.
-    parser.add_argument(
-        "--mimicit_text_path",
-        type=str,
-        default="",
-        help="Path to the new text dataset (including multi-run conversations). Should be in format /path/to/xx_instruction.json",
-    )
-    parser.add_argument(
-        "--train_config_text_path",
-        type=str,
-        default="",
-        help="Path to the new text dataset (including multi-run conversations). Should be in format /path/to/xx_train.json",
-    )
-    parser.add_argument(
-        "--past_mimicit_text_path",
-        type=str,
-        default="",
-        help="Path to the past text dataset (including multi-run conversations). Should be in format /path/to/xx_instruction.json",
-    )
-    parser.add_argument(
-        "--past_train_config_text_path",
-        type=str,
-        default="",
-        help="Path to the past text dataset (including multi-run conversations). Should be in format /path/to/xx_train.json",
-    )
-
-    # Arguments for video-text data.
-    parser.add_argument(
-        "--past_mimicit_vt_path",
-        type=str,
-        default="",
-        help="Path to the past video-text dataset. Should be in format /path/to/xx_instruction.json",
-    )
-    parser.add_argument(
-        "--past_images_vt_path",
-        type=str,
-        default="",
-        help="Path to the past images dataset (associated with video-text data). Should be in format /path/to/xx.json",
-    )
-    parser.add_argument(
-        "--mimicit_vt_path",
-        type=str,
-        default="",
-        help="Path to the new video-text dataset. Should be in format /path/to/xx_instruction.json",
-    )
-    parser.add_argument(
-        "--images_vt_path",
-        type=str,
-        default="",
-        help="Path to the new images dataset (associated with video-text data). Should be in format /path/to/xx.json",
-    )
-
-    # Argument for specifying the ratio for resampling past datasets.
-    parser.add_argument(
-        "--past_subset_ration",
-        type=float,
-        default=1,
-        help="The ratio for resampling the past dataset. Should be a float between 0 and 1.",
-    )
-
-    # optimizer args
+    parser.add_argument("--external_save_dir", type=str, default=None)
+    parser.add_argument("--run_name", type=str, default="otter-9b")
+    parser.add_argument("--model_name", type=str, default="otter", choices=["otter", "flamingo", "idefics"])
+    parser.add_argument("--inst_format", type=str, default="simple", choices=["simple", "llama2", "idefics"])
+    parser.add_argument("--past_mimicit_path", type=str, default="")
+    parser.add_argument("--past_images_path", type=str, default="")
+    parser.add_argument("--past_train_config_path", type=str, default="")
+    parser.add_argument("--mimicit_path", type=str, default="")
+    parser.add_argument("--images_path", type=str, default="")
+    parser.add_argument("--train_config_path", type=str, default="")
+    parser.add_argument("--past_mimicit_ic_path", type=str, default="")
+    parser.add_argument("--past_images_ic_path", type=str, default="")
+    parser.add_argument("--past_train_config_ic_path", type=str, default="")
+    parser.add_argument("--mimicit_ic_path", type=str, default="")
+    parser.add_argument("--images_ic_path", type=str, default="")
+    parser.add_argument("--train_config_ic_path", type=str, default="")
+    parser.add_argument("--val_mimicit_ic_path", type=str, default="")
+    parser.add_argument("--val_images_ic_path", type=str, default="")
+    parser.add_argument("--val_config_ic_path", type=str, default="")
+    parser.add_argument("--mimicit_text_path", type=str, default="")
+    parser.add_argument("--train_config_text_path", type=str, default="")
+    parser.add_argument("--past_mimicit_text_path", type=str, default="")
+    parser.add_argument("--past_train_config_text_path", type=str, default="")
+    parser.add_argument("--past_mimicit_vt_path", type=str, default="")
+    parser.add_argument("--past_images_vt_path", type=str, default="")
+    parser.add_argument("--mimicit_vt_path", type=str, default="")
+    parser.add_argument("--images_vt_path", type=str, default="")
+    parser.add_argument("--past_subset_ration", type=float, default=1, help="The ratio for resampling the past dataset. Should be a float between 0 and 1.")
     parser.add_argument("--gradient_checkpointing", action="store_true")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--save_ckpt_each_epoch", action="store_true")
     parser.add_argument("--num_epochs", type=int, default=1)
     parser.add_argument("--logging_steps", type=int, default=100, help="log loss every n steps")
-    # Sum of gradient optimization batch size
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--train_num_samples", type=int, default=-1)
-
+    parser.add_argument("--val_num_samples", type=int, default=-1)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--save_steps_interval", type=int, default=-1)
-    parser.add_argument(
-        "--pretrained_model_name_or_path",
-        type=str,
-        help="path to huggingface model or model identifier from local path or huggingface.co",
-        default=None,
-    )
-    parser.add_argument(
-        "--trained_ckpt",
-        type=str,
-        help="path to trained_ckpt",
-        default=None,
-    )
+    parser.add_argument("--pretrained_model_name_or_path", type=str, default=None)
+    parser.add_argument("--trained_ckpt", type=str, default=None)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--learning_rate", default=1e-4, type=float)
-    parser.add_argument(
-        "--lr_scheduler",
-        default="constant",
-        type=str,
-        help="constant, linear, or cosine",
-    )
+    parser.add_argument("--lr_scheduler", default="constant", type=str)
     parser.add_argument("--warmup_steps", default=1000, type=int)
     parser.add_argument("--warmup_steps_ratio", default=None, type=float)
     parser.add_argument("--weight_decay", default=0.1, type=float)
     parser.add_argument("--workers", type=int, default=4)
-    # distributed training args
-    parser.add_argument(
-        "--dist-url",
-        default="env://",
-        type=str,
-        help="url used to set up distributed training",
-    )
+    parser.add_argument("--dist-url", default="env://", type=str)
     parser.add_argument("--dist-backend", default="nccl", type=str, help="distributed backend")
-    parser.add_argument(
-        "--horovod",
-        default=False,
-        action="store_true",
-        help="Use horovod for distributed training.",
-    )
-    parser.add_argument(
-        "--no-set-device-rank",
-        default=False,
-        action="store_true",
-        help="Don't set device index from local rank (when CUDA_VISIBLE_DEVICES restricted to one per proc).",
-    )
-    # YH: Training detail
+    parser.add_argument("--horovod", default=False, action="store_true")
+    parser.add_argument("--no-set-device-rank", default=False, action="store_true")
     parser.add_argument("--mask_lm_head", action="store_true")
-    parser.add_argument(
-        "--max_seq_len",
-        type=int,
-        default=2048,
-        help="the maximum src sequence length",
-    )
+    parser.add_argument("--max_seq_len", type=int, default=2048)
     parser.add_argument("--patch-image-size", type=int, default=224)
     parser.add_argument("--resample_frames", type=int, default=32)
-    # this could potentially save 33GB of all model parameters for otter-9b, including the language and vision model.
     parser.add_argument("--save_hf_model", default=False, action="store_true")
-    parser.add_argument(
-        "--customized_config",
-        default=None,
-        type=str,
-        help="path to customized additional config.json, use to modify from the original config.json in pretrained model.",
-    )
+    parser.add_argument("--customized_config", default=None, type=str)
     parser.add_argument("--task_name", default="", type=str, help="task name, used to decide different function to load dataset.")
-    # wandb args
     parser.add_argument("--report_to_wandb", default=False, action="store_true")
-    parser.add_argument(
-        "--wandb_project",
-        type=str,
-    )
-    parser.add_argument(
-        "--wandb_entity",
-        type=str,
-    )
-    parser.add_argument(
-        "--save_checkpoints_to_wandb",
-        default=False,
-        action="store_true",
-        help="save checkpoints to wandb",
-    )
-    parser.add_argument(
-        "--resume_from_checkpoint",
-        default=False,
-        action="store_true",
-        help="resume from checkpoint (original openflamingo pt format, not hf format)",
-    )
-    # TODO: remove additional data args, all args would be processed in above parser
-    parser.add_argument(
-        "--delete_previous_checkpoint",
-        action="store_true",
-        help="delete previous checkpoint when saving new checkpoint",
-    )
+    parser.add_argument("--wandb_entity", type=str)
+    parser.add_argument("--wandb_project", type=str)
+    parser.add_argument("--save_checkpoints_to_wandb", default=False, action="store_true")
+    parser.add_argument("--resume_from_checkpoint", default=False, action="store_true")
+    parser.add_argument("--delete_previous_checkpoint", action="store_true", help="delete previous checkpoint when saving new checkpoint")
     # parser = add_data_args(parser)
     args = parser.parse_args()
-
-    # Check for argument consistency and set environment variables if needed
     if args.save_checkpoints_to_wandb and not args.report_to_wandb:
         raise ValueError("save_checkpoints_to_wandb requires report_to_wandb")
-
     if args.offline:
         os.environ["WANDB_MODE"] = "offline"
         os.environ["TRANSFORMERS_OFFLINE"] = "1"
-
     args.local_rank, args.rank, args.world_size = world_info_from_env()
 
     # if "COUNT_NODE" in os.environ:
@@ -552,9 +503,7 @@ def parse_args():
     # else:
     #     args.machine_rank = 0
 
-    # Seed for reproducibility
     random_seed(args.seed)
-
     return args
 
 
@@ -608,7 +557,6 @@ def main():
                 params_to_gather = [p for name, p in model.named_parameters() if p.requires_grad]
                 with deepspeed.zero.GatheredParameters(params_to_gather, modifier_rank=0):
                     if torch.distributed.get_rank() == 0:
-                        # 有参数
                         print(
                             device_id,
                             f"IDEFICS Trainable Params: {(sum(p.numel() for p in model.parameters() if p.requires_grad)) / 1e9:.3f} B",
@@ -642,10 +590,8 @@ def main():
         model.lang_encoder.resize_token_embeddings(len(model.text_tokenizer))
 
     random_seed(args.seed, args.rank)
-
     print(f"Start running training on rank {args.rank}.")
-
-    mimicit_loaders = get_data(args, image_processor, tokenizer, "mimicit")
+    mimicit_loaders, val_mimicit_loaders = get_data(args, image_processor, tokenizer, "mimicit")
 
     def get_grouped_params(model):
         params_with_wd, params_without_wd = [], []
@@ -666,6 +612,7 @@ def main():
         ]
 
     total_training_steps = len(mimicit_loaders[0]) * args.num_epochs
+    total_validation_steps = len(val_mimicit_loaders[0]) * args.num_epochs
 
     resume_from_epoch = 0
     # check if a checkpoint exists for this run
@@ -719,14 +666,14 @@ def main():
     if accelerator.distributed_type == "DEEPSPEED" or accelerator.distributed_type == "MULTI_GPU":
         model, optimizer = accelerator.prepare(model, optimizer)
     else:
-        model, optimizer, lr_scheduler, mimicit_loaders = accelerator.prepare(model, optimizer, lr_scheduler, mimicit_loaders)
+        model, optimizer, lr_scheduler, mimicit_loaders, val_mimicit_loaders = accelerator.prepare(model, optimizer, lr_scheduler, mimicit_loaders, val_mimicit_loaders)
 
     model.train()
 
     for epoch in range(resume_from_epoch, args.num_epochs):
+        # Train
         for cur_data_loader in mimicit_loaders:
             cur_data_loader.dataset.set_epoch(epoch)
-
         start = time.time()
         train_one_epoch(
             args=args,
@@ -744,7 +691,28 @@ def main():
         end_mins = int(end / 60)
         end_secs = int(end - (end_mins * 60))
         print(f"Training Time: {end_mins}m {end_secs}s")
-        
+        accelerator.wait_for_everyone()
+
+        # Validation
+        for cur_data_loader in mimicit_loaders:
+            cur_data_loader.dataset.set_epoch(epoch)
+        start = time.time()
+        val_one_epoch(
+            args=args,
+            model=model,
+            epoch=epoch,
+            tokenizer=tokenizer,
+            optimizer=optimizer,
+            lr_scheduler=lr_scheduler,
+            mimicit_loaders=val_mimicit_loaders,
+            accelerator=accelerator,
+            device_id=device_id,
+            wandb=wandb,
+        )
+        end = time.time() - start
+        end_mins = int(end / 60)
+        end_secs = int(end - (end_mins * 60))
+        print(f"Validation Time: {end_mins}m {end_secs}s")
         accelerator.wait_for_everyone()
 
         if args.save_ckpt_each_epoch:

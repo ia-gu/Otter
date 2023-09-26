@@ -18,6 +18,7 @@ from peft import get_peft_model, LoraConfig, TaskType
 
 import sys
 import random
+import numpy as np
 
 # The package importlib_metadata is in a different place, depending on the python version.
 if sys.version_info < (3, 8):
@@ -203,6 +204,17 @@ class OtterPerceiverResampler(nn.Module):
             self.layers.append(OtterPerceiverBlock(dim=dim, dim_head=dim_head, heads=heads, mult=ff_mult))
 
         self.norm = nn.LayerNorm(dim)
+        self.hook_counter = 0
+        self.hook_norm = np.array([])
+        def hook_fn(module, grad_input, grad_output):
+            self.hook_counter += 1
+            for i in module.parameters():
+                self.hook_norm = np.append(self.hook_norm, (grad_output[0].norm().item())/i.numel())
+            if self.hook_counter >= 10:
+                print('otter perceiver resampler', np.sum(self.hook_norm))
+                self.hook_counter = 0
+                self.hook_norm = np.array([])
+        self.norm.register_full_backward_hook(hook_fn)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -252,6 +264,7 @@ class OtterMaskedCrossAttention(nn.Module):
 
         # whether for text to only attend to immediate preceding image, or all previous images
         self.only_attend_immediate_media = only_attend_immediate_media
+        self.norm = nn.LayerNorm(dim)
 
     def forward(
         self,
@@ -363,6 +376,18 @@ class OtterGatedCrossAttentionBlock(nn.Module):
             ]
         )
         self.ff_gate = nn.Parameter(torch.tensor([0.0]))
+
+        self.hook_counter = 0
+        self.hook_norm = np.array([])
+        def hook_fn(module, grad_input, grad_output):
+            self.hook_counter += 1
+            for i in module.parameters():
+                self.hook_norm = np.append(self.hook_norm, (grad_output[0].norm().item())/i.numel())
+            if self.hook_counter >= 10:
+                print('otter masked cross attention', np.sum(self.hook_norm))
+                self.hook_counter = 0
+                self.hook_norm = np.array([])
+        self.attn.register_full_backward_hook(hook_fn)
 
     def forward(
         self,
@@ -829,7 +854,27 @@ class OtterForConditionalGeneration(OtterPreTrainedModel):
             self.lang_encoder = get_peft_model(self.lang_encoder, lora_config)
             self.lang_encoder.print_trainable_parameters()
             self.lang_encoder.__class__.__name__ = f"{original_architecture_name}LoRA"
+        # import pdb
+        # pdb.set_trace()
+        # Backward hookの登録
+        self.hook_counter = 0
+        self.hook_norm = np.array([])
+        def hook_fn(module, grad_input, grad_output):
+            self.hook_counter += 1
+            for i in module.parameters():
+                self.hook_norm = np.append(self.hook_norm, (grad_output[0].norm().item())/i.numel())
+            if self.hook_counter >= 10:
+                # print('grad_input: ', grad_input)
+                # print('grad_input_sum: ', torch.sum(grad_input[0]))
+                # print('grad_output: ', grad_output)
+                # print(self.hook_norm)
+                print(np.sum(self.hook_norm))
+                self.hook_counter = 0
+                self.hook_norm = np.array([])
 
+        
+        # self.lang_encoder.register_full_backward_hook(hook_fn)
+        # self.vision_encoder.register_full_backward_hook(hook_fn)
         self.post_init()
 
     def get_input_embeddings(self) -> nn.Module:
