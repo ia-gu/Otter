@@ -18,7 +18,7 @@ pipeline/train/instruction_following.py \
 --batch_size=16 \
 --logging_steps=10 \
 --num_epochs=1 \
---run_name=VI_batch16_long_pairs25 \
+--run_name=VI_batch16_long_pairs25_hook_csv \
 --wandb_entity=ia-gu \
 --wandb_project=my-awesome-project \
 --workers=1 \

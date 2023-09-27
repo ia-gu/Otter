@@ -264,7 +264,6 @@ def val_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, lr_
     )  # for different tokenizer
     endofchunk_token_id = tokenizer(endofchunk_text, add_special_tokens=False)["input_ids"][-1]
     answer_token_id = tokenizer("<answer>", add_special_tokens=False)["input_ids"][-1]
-    ens_token_id = tokenizer(tokenizer.eos_token, add_special_tokens=False)["input_ids"][-1]
 
     model.eval()
 
@@ -391,23 +390,6 @@ def val_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, lr_
                     },
                     commit=True,
                 )
-                # torch.cuda.empty_cache()
-                # gc.collect()  # forces garbage collection
-
-            if args.rank == 0 and global_step != 0 and (args.save_steps_interval != -1) and (global_step % args.save_steps_interval == 0):
-                if not os.path.exists(args.external_save_dir):
-                    os.makedirs(args.external_save_dir)
-
-                unwrapped_model = accelerator.unwrap_model(model)
-                checkpoint_dict = {
-                    "steps": global_step,
-                    "model_state_dict": get_checkpoint(unwrapped_model),
-                }
-                print(f"Saving checkpoint to {args.external_save_dir}/checkpoint_steps_{global_step}.pt")
-                accelerator.save(checkpoint_dict, f"{args.external_save_dir}/checkpoint_steps_{global_step}.pt")
-                if args.delete_previous_checkpoint:
-                    if epoch > 0 and os.path.exists(f"{args.external_save_dir}/checkpoint_step_{global_step-args.save_steps_interval}.pt"):
-                        os.remove(f"{args.external_save_dir}/checkpoint_step_{global_step-args.save_steps_interval}.pt")
 
         # Log loss to console
         if ((num_steps + 1) % args.logging_steps == 0) and args.rank == 0:
