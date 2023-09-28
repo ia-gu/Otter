@@ -16,6 +16,7 @@ from flamingo.mpt_redpajama.mosaic_gpt import MosaicGPT
 from transformers.models.auto import AutoModel, AutoModelForCausalLM, AutoTokenizer
 from peft import get_peft_model, LoraConfig, TaskType
 
+import os
 import sys
 import random
 import numpy as np
@@ -207,13 +208,14 @@ class OtterPerceiverResampler(nn.Module):
         self.norm = nn.LayerNorm(dim)
         self.hook_counter = 0
         self.hook_norm = np.array([])
-        with open('perceiver_resampler.csv', '+a') as f: pass
+        os.makedirs('result_mat', exist_ok=True)
+        with open('result_mat/perceiver_resampler.csv', '+a') as f: pass
         def hook_fn(module, grad_input, grad_output):
             self.hook_counter += 1
             if self.hook_counter >= 10:
                 for i in module.parameters():
                     self.hook_norm = np.append(self.hook_norm, (grad_output[0].norm().item())/i.numel())
-                with open('perceiver_resampler.csv', '+a') as f:
+                with open('result_mat/perceiver_resampler.csv', '+a') as f:
                     writer = csv.writer(f)
                     writer.writerow([np.sum(self.hook_norm)])
                 self.hook_counter = 0
@@ -384,7 +386,7 @@ class OtterGatedCrossAttentionBlock(nn.Module):
         self.hook_counter = 0
         self.hook_norm = np.array([])
         self.hook_norm_all = np.array([])
-        with open('gated_cross_attn.csv', 'w') as f: pass
+        with open('result_mat/gated_cross_attn.csv', 'w') as f: pass
         def hook_fn(module, grad_input, grad_output):
             self.hook_counter += 1
             if self.hook_counter >= 10:
@@ -394,7 +396,7 @@ class OtterGatedCrossAttentionBlock(nn.Module):
                 self.hook_counter = 0
                 self.hook_norm = np.array([])
                 if len(self.hook_norm_all>=8):
-                    with open('gated_cross_attn.csv', '+a') as f:
+                    with open('result_mat/gated_cross_attn.csv', '+a') as f:
                         writer = csv.writer(f)
                         writer.writerow([np.sum(self.hook_norm_all)])                
                     self.hook_norm_all = np.array([])
@@ -963,6 +965,7 @@ class OtterForConditionalGeneration(OtterPreTrainedModel):
         """
         assert (vision_x is not None) or use_cached_vision_x, "Must provide either vision_x or use_cached_vision_x to True."
 
+        # False
         if use_cached_vision_x:
             # Case: use cached; vision_x should be cached and other
             # vision-related inputs should not be provided.
@@ -982,6 +985,7 @@ class OtterForConditionalGeneration(OtterPreTrainedModel):
             **kwargs,
         )
 
+        # True
         if clear_conditioned_layers:
             self.lang_encoder.clear_conditioned_layers()
 

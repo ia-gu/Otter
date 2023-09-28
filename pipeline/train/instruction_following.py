@@ -144,7 +144,7 @@ def train_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, l
                     pure_text = torch.all(images == 0)
                     image_attention_mask = get_image_attention_mask(input_ids, max_num_images, tokenizer, include_image=not pure_text)
                     # assert images.shape[1] == 1, "The second dimension is not 1"
-
+                    # HACK: loss
                     loss_mimicit = model(
                         pixel_values=images.squeeze(1).to(autocast_type),
                         input_ids=input_ids,
@@ -159,7 +159,6 @@ def train_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, l
                         attention_mask=attention_mask,
                         labels=labels,
                     )[0]
-
             if accelerator.mixed_precision == "fp16":
                 accelerator.backward(loss_mimicit.to(device_id))
             else:
@@ -506,6 +505,7 @@ def main():
         if args.customized_config is not None:
             kwargs["config"] = args.customized_config
         if "otter" in args.model_name.lower():
+            # HACK: loss??
             model = OtterForConditionalGeneration.from_pretrained(
                 args.pretrained_model_name_or_path,
                 **kwargs,
@@ -676,7 +676,7 @@ def main():
         accelerator.wait_for_everyone()
 
         # Validation
-        for cur_data_loader in mimicit_loaders:
+        for cur_data_loader in val_mimicit_loaders:
             cur_data_loader.dataset.set_epoch(epoch)
         start = time.time()
         val_one_epoch(

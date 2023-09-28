@@ -108,6 +108,7 @@ ipython_config.py
 output/
 debug*/
 wandb/
+result_mat/
 archived/
 amlt/
 scripts/

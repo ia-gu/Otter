@@ -438,6 +438,9 @@ class MPTForCausalLM(MPTPreTrainedModel):
                 _labels.to(logits.device).view(-1),
             )
 
+        # import pdb
+        # pdb.set_trace()
+
         return CausalLMOutputWithPast(
             loss=loss,
             logits=logits,

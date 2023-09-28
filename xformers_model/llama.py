@@ -724,7 +724,8 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         if not return_dict:
             output = (logits,) + outputs[1:]
             return (loss,) + output if loss is not None else output
-
+        import pdb
+        pdb.set_trace()
         return CausalLMOutputWithPast(
             loss=loss,
             logits=logits,
