@@ -397,6 +397,7 @@ class MPTForCausalLM(MPTPreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         use_cache: Optional[bool] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
+        tokenizer = None
     ):
         return_dict = return_dict if return_dict is not None else self.config.return_dict
         use_cache = use_cache if use_cache is not None else self.config.use_cache
@@ -438,8 +439,7 @@ class MPTForCausalLM(MPTPreTrainedModel):
                 _labels.to(logits.device).view(-1),
             )
 
-        # import pdb
-        # pdb.set_trace()
+        # loss_2 = self._cross_entropy(logits.view(-1, logits.size(-1)), _labels.to(logits.device).view(-1), accelerator)
 
         return CausalLMOutputWithPast(
             loss=loss,
@@ -448,7 +448,17 @@ class MPTForCausalLM(MPTPreTrainedModel):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
+    
+    def _cross_entropy(self, input, label, accelerator):
+        exp_tensor = torch.exp(input)
+        softmax_tensor = exp_tensor / exp_tensor.sum(dim=1, keepdim=True)
+        one_hot_labels = torch.zeros_like(input)
+        one_hot_labels.scatter_(1, label.unsqueeze(1), 1)
+        accelerator.wait_for_everyone()
+        cross_entropy_loss = -(one_hot_labels * torch.log(softmax_tensor)).sum() / input.size(0)
 
+        return cross_entropy_loss
+    
     def param_init_fn(self, module):
         init_fn_name = self.config.init_config["name"]
         MODEL_INIT_REGISTRY[init_fn_name](module=module, n_layers=self.config.n_layers, d_model=self.config.d_model, **self.config.init_config)

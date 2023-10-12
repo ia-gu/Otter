@@ -88,8 +88,8 @@ def train_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, l
         data_time_m.update(time.time() - end)
 
         global_step = num_steps + epoch * num_batches_per_epoch
-        #### MIMIC-IT FORWARD PASS ####
 
+        #### MIMIC-IT FORWARD PASS ####
         total_losses = []
         # print("####################################")
         # print(batch_mimicits.shape)
@@ -129,14 +129,14 @@ def train_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, l
 
             with accelerator.autocast():
                 unwrapped_model = accelerator.unwrap_model(model)
-                if num_steps == 0:
-                    # info check
-                    accelerator.print(f"input_ids: {input_ids.shape}")
-                    accelerator.print(f"images: {images.shape}")
-                    accelerator.print(f"attention_mask: {attention_mask.shape}")
-                    accelerator.print(f"labels: {labels.shape}")
-                    accelerator.print(f"model: {unwrapped_model.__class__.__name__}")
-                    accelerator.print(f"model dtype: {unwrapped_model.dtype}")
+                # if num_steps == 0:
+                #     # info check
+                #     accelerator.print(f"input_ids: {input_ids.shape}")
+                #     accelerator.print(f"images: {images.shape}")
+                #     accelerator.print(f"attention_mask: {attention_mask.shape}")
+                #     accelerator.print(f"labels: {labels.shape}")
+                #     accelerator.print(f"model: {unwrapped_model.__class__.__name__}")
+                #     accelerator.print(f"model dtype: {unwrapped_model.dtype}")
 
                 if IdeficsForVisionText2Text is not None and isinstance(unwrapped_model, IdeficsForVisionText2Text):
                     # only for image model
@@ -151,6 +151,7 @@ def train_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, l
                         attention_mask=attention_mask,
                         image_attention_mask=image_attention_mask,
                         labels=labels,
+                        tokenizer=tokenizer
                     )[0]
                 else:
                     loss_mimicit = model(
@@ -158,6 +159,7 @@ def train_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, l
                         lang_x=input_ids,
                         attention_mask=attention_mask,
                         labels=labels,
+                        tokenizer=tokenizer
                     )[0]
             if accelerator.mixed_precision == "fp16":
                 accelerator.backward(loss_mimicit.to(device_id))
@@ -203,21 +205,21 @@ def train_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, l
         if accelerator.sync_gradients:
             if args.rank == 0 and args.report_to_wandb:
                 # compute within rank 0
-                mimicit_samples_per_second = args.gradient_accumulation_steps * args.batch_size * args.world_size / step_time_m.val
-                mimicit_samples_per_second_per_gpu = args.gradient_accumulation_steps * args.batch_size / step_time_m.val
+                # mimicit_samples_per_second = args.gradient_accumulation_steps * args.batch_size * args.world_size / step_time_m.val
+                # mimicit_samples_per_second_per_gpu = args.gradient_accumulation_steps * args.batch_size / step_time_m.val
 
-                wandb.log(
-                    {
-                        "data_time": data_time_m.avg,
-                        "step_time": step_time_m.avg,
-                        "mimicit_samples_per_second": mimicit_samples_per_second,
-                        "mimicit_samples_per_second_per_gpu": mimicit_samples_per_second_per_gpu,
-                        "lr": optimizer.param_groups[0]["lr"],
-                    },
-                    commit=False,
-                )
-                step_time_m.reset()
-                data_time_m.reset()
+                # wandb.log(
+                #     {
+                #         "data_time": data_time_m.avg,
+                #         "step_time": step_time_m.avg,
+                #         "mimicit_samples_per_second": mimicit_samples_per_second,
+                #         "mimicit_samples_per_second_per_gpu": mimicit_samples_per_second_per_gpu,
+                #         "lr": optimizer.param_groups[0]["lr"],
+                #     },
+                #     commit=False,
+                # )
+                # step_time_m.reset()
+                # data_time_m.reset()
 
                 wandb.log(
                     {
@@ -226,6 +228,7 @@ def train_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, l
                     },
                     commit=True,
                 )
+
                 # torch.cuda.empty_cache()
                 # gc.collect()  # forces garbage collection
 
@@ -281,7 +284,7 @@ def val_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, lr_
     ):
         data_time_m.update(time.time() - end)
 
-        global_step = num_steps + epoch * num_batches_per_epoch
+        val_global_step = num_steps + epoch * num_batches_per_epoch
         #### MIMIC-IT FORWARD PASS ####
 
         total_losses = []
@@ -324,14 +327,14 @@ def val_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, lr_
 
                 with accelerator.autocast():
                     unwrapped_model = accelerator.unwrap_model(model)
-                    if num_steps == 0:
-                        # info check
-                        accelerator.print(f"input_ids: {input_ids.shape}")
-                        accelerator.print(f"images: {images.shape}")
-                        accelerator.print(f"attention_mask: {attention_mask.shape}")
-                        accelerator.print(f"labels: {labels.shape}")
-                        accelerator.print(f"model: {unwrapped_model.__class__.__name__}")
-                        accelerator.print(f"model dtype: {unwrapped_model.dtype}")
+                    # if num_steps == 0:
+                    #     # info check
+                    #     accelerator.print(f"input_ids: {input_ids.shape}")
+                    #     accelerator.print(f"images: {images.shape}")
+                    #     accelerator.print(f"attention_mask: {attention_mask.shape}")
+                    #     accelerator.print(f"labels: {labels.shape}")
+                    #     accelerator.print(f"model: {unwrapped_model.__class__.__name__}")
+                    #     accelerator.print(f"model dtype: {unwrapped_model.dtype}")
 
                     if IdeficsForVisionText2Text is not None and isinstance(unwrapped_model, IdeficsForVisionText2Text):
                         # only for image model
@@ -366,26 +369,25 @@ def val_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, lr_
         if accelerator.sync_gradients:
             if args.rank == 0 and args.report_to_wandb:
                 # compute within rank 0
-                mimicit_samples_per_second = args.gradient_accumulation_steps * args.batch_size * args.world_size / step_time_m.val
-                mimicit_samples_per_second_per_gpu = args.gradient_accumulation_steps * args.batch_size / step_time_m.val
+                # mimicit_samples_per_second = args.gradient_accumulation_steps * args.batch_size * args.world_size / step_time_m.val
+                # mimicit_samples_per_second_per_gpu = args.gradient_accumulation_steps * args.batch_size / step_time_m.val
 
-                wandb.log(
-                    {
-                        "val_data_time": data_time_m.avg,
-                        "val_step_time": step_time_m.avg,
-                        "val_mimicit_samples_per_second": mimicit_samples_per_second,
-                        "val_mimicit_samples_per_second_per_gpu": mimicit_samples_per_second_per_gpu,
-                        "val_lr": optimizer.param_groups[0]["lr"],
-                    },
-                    commit=False,
-                )
-                step_time_m.reset()
-                data_time_m.reset()
+                # wandb.log(
+                #     {
+                #         "val_data_time": data_time_m.avg,
+                #         "val_step_time": step_time_m.avg,
+                #         "val_mimicit_samples_per_second": mimicit_samples_per_second,
+                #         "val_mimicit_samples_per_second_per_gpu": mimicit_samples_per_second_per_gpu,
+                #     },
+                #     commit=False,
+                # )
+                # step_time_m.reset()
+                # data_time_m.reset()
 
                 wandb.log(
                     {
                         "val_loss_mimicit": mean_loss.item(),
-                        "val_global_step": global_step // args.gradient_accumulation_steps,
+                        "val_global_step": val_global_step // args.gradient_accumulation_steps,
                     },
                     commit=True,
                 )
@@ -524,7 +526,6 @@ def main():
             tokenizer = model.text_tokenizer
             image_processor = CLIPImageProcessor()
         elif "idefics" in args.model_name.lower():
-            # import pdb;pdb.set_trace()
             model = IdeficsForVisionText2Text.from_pretrained(
                 args.pretrained_model_name_or_path,
                 **kwargs,

@@ -150,7 +150,8 @@ class MimicitDataset(Dataset):
                 random.shuffle(cache_train_list)
                 cache_train_list = cache_train_list[: int(len(cache_train_list) * args.past_subset_ration)]
             if self.train_data_list == []:
-                self.train_data_list = cache_train_list[:] # ??
+                # HACK
+                self.train_data_list = cache_train_list[:100] # ??
                 self.train_config = cache_train_config
             else:
                 self.train_data_list += cache_train_list[:10000] # ??

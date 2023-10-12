@@ -4,7 +4,8 @@ function terminate() {
   exit
 }
 trap 'terminate' {1,2,3,15}
-
+export CUDA_LAUNCH_BLOCKING=1
+export TORCH_USE_CUDA_DSA
 accelerate launch --config_file=./pipeline/accelerate_configs/accelerate_config_fsdp.yaml \
 pipeline/train/instruction_following.py \
 --pretrained_model_name_or_path="./weights/OTTER-Image-MPT7B" \
@@ -17,15 +18,15 @@ pipeline/train/instruction_following.py \
 --external_save_dir="./log" \
 --batch_size=16 \
 --logging_steps=10 \
---num_epochs=1 \
---run_name=VI_batch16_long_pairs25_hook_csv \
+--num_epochs=3 \
+--run_name=debug \
 --wandb_entity=ia-gu \
---wandb_project=my-awesome-project \
+--wandb_project=debug \
 --workers=1 \
 --lr_scheduler=cosine \
 --learning_rate=1e-5 \
 --warmup_steps_ratio=0.01 \
-# --report_to_wandb \
+--report_to_wandb \
 
 # accelerate launch --config_file=./pipeline/accelerate_configs/accelerate_config_fsdp.yaml \
 # pipeline/train/instruction_following.py \
