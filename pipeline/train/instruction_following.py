@@ -129,6 +129,31 @@ def val_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, lr_
                 if fake_token_image_exists:
                     labels[labels == fake_token_image_token_id] = -100
 
+                if not args.include_context_loss:
+                    def modify_list(lst):
+                        sequences = []
+                        current_sequence = []
+                        last_start_index = 0
+
+                        for i, x in enumerate(lst):
+                            if x == -100:
+                                if current_sequence:
+                                    sequences.append((last_start_index, i))
+                                    current_sequence = []
+                            else:
+                                if not current_sequence:
+                                    last_start_index = i
+                                current_sequence.append(x)
+
+                        if current_sequence:
+                            sequences.append((last_start_index, len(lst)))
+
+                        for start, end in sequences[:-1]:
+                            for i in range(start, end):
+                                lst[i] = -100
+                    
+                    for label in labels:
+                        modify_list(label)
                 with accelerator.autocast():
                     unwrapped_model = accelerator.unwrap_model(model)
 
@@ -252,6 +277,33 @@ def train_one_epoch(args, model, epoch, mimicit_loaders, val_mimicit_loaders, to
             labels[labels == media_token_id] = -100
             if fake_token_image_exists:
                 labels[labels == fake_token_image_token_id] = -100
+            # print(labels)
+            if not args.include_context_loss:
+                def modify_list(lst):
+                    sequences = []
+                    current_sequence = []
+                    last_start_index = 0
+
+                    for i, x in enumerate(lst):
+                        if x == -100:
+                            if current_sequence:
+                                sequences.append((last_start_index, i))
+                                current_sequence = []
+                        else:
+                            if not current_sequence:
+                                last_start_index = i
+                            current_sequence.append(x)
+
+                    if current_sequence:
+                        sequences.append((last_start_index, len(lst)))
+
+                    for start, end in sequences[:-1]:
+                        for i in range(start, end):
+                            lst[i] = -100
+                
+                for label in labels:
+                    modify_list(label)
+                # print(labels)
 
             with accelerator.autocast():
                 unwrapped_model = accelerator.unwrap_model(model)
@@ -421,6 +473,7 @@ def parse_args():
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--save_steps_interval", type=int, default=-1)
     parser.add_argument("--pretrained_model_name_or_path", type=str, default=None)
+    parser.add_argument("--include_context_loss", type=bool, default=True)
     parser.add_argument("--trained_ckpt", type=str, default=None)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--learning_rate", default=1e-4, type=float)

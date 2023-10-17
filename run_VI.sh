@@ -26,7 +26,8 @@ pipeline/train/instruction_following.py \
 --lr_scheduler=cosine \
 --learning_rate=1e-5 \
 --warmup_steps_ratio=0.01 \
---report_to_wandb \
+--include_context_loss=False \
+# --report_to_wandb \
 
 # accelerate launch --config_file=./pipeline/accelerate_configs/accelerate_config_fsdp.yaml \
 # pipeline/train/instruction_following.py \
