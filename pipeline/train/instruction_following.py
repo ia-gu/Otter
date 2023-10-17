@@ -217,24 +217,6 @@ def train_one_epoch(args, model, epoch, mimicit_loaders, val_mimicit_loaders, to
 
         #### MIMIC-IT FORWARD PASS ####
         total_losses = []
-
-        if args.val_times_per_epoch>0:
-            if num_steps%(total_training_steps//args.val_times_per_epoch)==0:
-                for cur_data_loader in val_mimicit_loaders:
-                    cur_data_loader.dataset.set_epoch(epoch)
-                val_one_epoch(
-                    args=args,
-                    model=model,
-                    epoch=epoch+num_steps,
-                    tokenizer=tokenizer,
-                    optimizer=optimizer,
-                    lr_scheduler=lr_scheduler,
-                    mimicit_loaders=val_mimicit_loaders,
-                    accelerator=accelerator,
-                    device_id=device_id,
-                    wandb=wandb,
-                )
-                accelerator.wait_for_everyone()
         model.train()
         for batch_mimicit in batch_mimicits:
 
@@ -372,6 +354,23 @@ def train_one_epoch(args, model, epoch, mimicit_loaders, val_mimicit_loaders, to
         if ((num_steps + 1) % args.logging_steps == 0) and args.rank == 0:
             print(f"Step {num_steps+1}/{num_batches_per_epoch} of epoch {epoch+1}/{args.num_epochs} complete. Loss MIMIC-IT: {mean_loss.item():.3f}")
 
+        if args.val_times_per_epoch>0:
+            if num_steps%(total_training_steps//args.val_times_per_epoch)==0:
+                for cur_data_loader in val_mimicit_loaders:
+                    cur_data_loader.dataset.set_epoch(epoch)
+                val_one_epoch(
+                    args=args,
+                    model=model,
+                    epoch=epoch+num_steps,
+                    tokenizer=tokenizer,
+                    optimizer=optimizer,
+                    lr_scheduler=lr_scheduler,
+                    mimicit_loaders=val_mimicit_loaders,
+                    accelerator=accelerator,
+                    device_id=device_id,
+                    wandb=wandb,
+                )
+                accelerator.wait_for_everyone()
 
 def parse_args():
     """
@@ -392,6 +391,9 @@ def parse_args():
     parser.add_argument("--past_mimicit_ic_path", type=str, default="")
     parser.add_argument("--past_images_ic_path", type=str, default="")
     parser.add_argument("--past_train_config_ic_path", type=str, default="")
+    parser.add_argument("--val_mimicit_path", type=str, default="", help="")
+    parser.add_argument("--val_images_path", type=str, default="", help="")
+    parser.add_argument("--val_config_path", type=str, default="", help="")
     parser.add_argument("--mimicit_ic_path", type=str, default="")
     parser.add_argument("--images_ic_path", type=str, default="")
     parser.add_argument("--train_config_ic_path", type=str, default="")
@@ -415,7 +417,7 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--train_num_samples", type=int, default=-1)
     parser.add_argument("--val_num_samples", type=int, default=-1)
-    parser.add_argument("--val_times_per_epoch", type=int, default=10)
+    parser.add_argument("--val_times_per_epoch", type=int, default=10, help="validation times per epoch. got 0, no validation")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--save_steps_interval", type=int, default=-1)
     parser.add_argument("--pretrained_model_name_or_path", type=str, default=None)
@@ -653,28 +655,6 @@ def main():
         end_secs = int(end - (end_mins * 60))
         print(f"Training Time: {end_mins}m {end_secs}s")
         accelerator.wait_for_everyone()
-
-        # Validation
-        # for cur_data_loader in val_mimicit_loaders:
-        #     cur_data_loader.dataset.set_epoch(epoch)
-        # start = time.time()
-        # val_one_epoch(
-        #     args=args,
-        #     model=model,
-        #     epoch=epoch,
-        #     tokenizer=tokenizer,
-        #     optimizer=optimizer,
-        #     lr_scheduler=lr_scheduler,
-        #     mimicit_loaders=val_mimicit_loaders,
-        #     accelerator=accelerator,
-        #     device_id=device_id,
-        #     wandb=wandb,
-        # )
-        # end = time.time() - start
-        # end_mins = int(end / 60)
-        # end_secs = int(end - (end_mins * 60))
-        # print(f"Validation Time: {end_mins}m {end_secs}s")
-        # accelerator.wait_for_everyone()
 
         if args.save_ckpt_each_epoch:
             if args.rank == 0:

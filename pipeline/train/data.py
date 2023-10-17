@@ -662,34 +662,41 @@ def get_mimicit_dataset(args, image_processor, tokenizer, epoch=0, floor=False):
             if args.past_train_config_ic_path != ""
             else args.train_config_ic_path.split(",")
         )
-        val_all_mimicit_ic_path = args.val_mimicit_ic_path.split(",")
-        val_all_images_ic_path = args.val_images_ic_path.split(",")
-        all_val_config_ic_path = args.val_config_ic_path.split(",")
+        
         if args.past_mimicit_ic_path != "":
             ic_status = ["new"] * len(args.mimicit_ic_path.split(",")) + ["past"] * len(args.past_mimicit_ic_path.split(","))
         else:
             ic_status = ["new"] * len(args.mimicit_ic_path.split(","))
         unified_dataset = MimicitDataset(args, all_mimicit_ic_path, all_images_ic_path, all_train_config_ic_path, status_list=ic_status)
-        val_unified_dataset = MimicitDataset(args, val_all_mimicit_ic_path, val_all_images_ic_path, all_val_config_ic_path, status_list=ic_status)
         unified_datasets.append(unified_dataset)
-        val_unified_datasets.append(val_unified_dataset)
+        
+        if args.val_mimicit_ic_path != "":
+            all_val_mimicit_ic_path = args.val_mimicit_ic_path.split(",")
+            all_val_images_ic_path = args.val_images_ic_path.split(",")
+            all_val_config_ic_path = args.val_config_ic_path.split(",")
+            val_unified_dataset = MimicitDataset(args, all_val_mimicit_ic_path, all_val_images_ic_path, all_val_config_ic_path, status_list=ic_status)
+            val_unified_datasets.append(val_unified_dataset)
 
     # processing for image-text datasets
     if args.mimicit_path != "":
         all_mimicit_path = args.mimicit_path.split(",") + args.past_mimicit_path.split(",") if args.past_mimicit_path != "" else args.mimicit_path.split(",")
         all_images_path = args.images_path.split(",") + args.past_images_path.split(",") if args.past_images_path != "" else args.images_path.split(",")
-        all_train_config_path = (
-            args.train_config_path.split(",") + args.past_train_config_path.split(",")
-            if args.past_train_config_path != ""
-            else args.train_config_path.split(",")
-        )
-        # print(print(f'all_train_config_path: {all_train_config_path}'))
+        all_train_config_path = args.train_config_path.split(",") + args.past_train_config_path.split(",") if args.past_train_config_path != "" else args.train_config_path.split(",")
+        
         if args.past_mimicit_path != "":
             status = ["new"] * len(args.mimicit_path.split(",")) + ["past"] * len(args.past_mimicit_path.split(","))
         else:
             status = ["new"] * len(args.mimicit_path.split(","))
         unified_dataset = MimicitDataset(args, all_mimicit_path, all_images_path, all_train_config_path, status_list=status)
         unified_datasets.append(unified_dataset)
+        
+        if args.val_mimicit_path != "":
+            all_val_mimicit_path = args.val_mimicit_path.split(",")
+            all_val_images_path = args.val_images_path.split(",")
+            all_val_config_path = args.val_config_path.split(",")
+            val_unified_dataset = MimicitDataset(args, all_val_mimicit_path, all_val_images_path, all_val_config_path, status_list=status)
+            val_unified_datasets.append(val_unified_dataset)
+            
 
     # processing for text datasets
     if args.mimicit_text_path != "":
@@ -747,8 +754,16 @@ def get_mimicit_dataset(args, image_processor, tokenizer, epoch=0, floor=False):
     dataloaders = []
     val_dataloaders = []
 
+    # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+    # print(f"args.train_num_samples: {args.train_num_samples}")
+    # print(f"num_samples: {num_samples}")
+    # print(f"len(unified_dataset): {len(unified_dataset)}")
+    # print(f"len(unified_datasets): {len(unified_datasets)}")
     for unified_dataset in unified_datasets:
-        sampler = RandomSampler(unified_dataset, replacement=True, num_samples=num_samples)
+        if len(unified_datasets)==1:
+            sampler = RandomSampler(unified_dataset, replacement=False, num_samples=len(unified_dataset))
+        else:
+            sampler = RandomSampler(unified_dataset, replacement=True, num_samples=num_samples)
         if args.distributed_type == "DEEPSPEED" or args.distributed_type == "MULTI_GPU":
             sampler = DistributedProxySampler(sampler, num_replicas=args.world_size, rank=args.rank)
         dataloader = torch.utils.data.DataLoader(
@@ -763,7 +778,10 @@ def get_mimicit_dataset(args, image_processor, tokenizer, epoch=0, floor=False):
 
         dataloaders.append(dataloader)
     for val_unified_dataset in val_unified_datasets:
-        sampler = RandomSampler(val_unified_dataset, replacement=True, num_samples=val_num_samples)
+        if len(val_unified_datasets)==1:
+            sampler = RandomSampler(val_unified_dataset, replacement=False, num_samples=len(val_unified_dataset))
+        else:
+            sampler = RandomSampler(val_unified_dataset, replacement=True, num_samples=num_samples)
         if args.distributed_type == "DEEPSPEED" or args.distributed_type == "MULTI_GPU":
             sampler = DistributedProxySampler(sampler, num_replicas=args.world_size, rank=args.rank)
         dataloader = torch.utils.data.DataLoader(
@@ -777,6 +795,10 @@ def get_mimicit_dataset(args, image_processor, tokenizer, epoch=0, floor=False):
         )
 
         val_dataloaders.append(dataloader)
+    # print("MMMMMMMMMMMMMMMMMMMMMMMM")
+    # print(len(dataloaders[0]))
+    # print(len(dataloaders[1]))
+    # print("MMMMMMMMMMMMMMMMMMMMMMMM")
     return dataloaders, val_dataloaders
 
 

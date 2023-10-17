@@ -431,14 +431,15 @@ class MPTForCausalLM(MPTPreTrainedModel):
                 warnings.warn(f"Multiplying logits by {self.logit_scale=}. This will produce uniform (uninformative) outputs.")
             logits *= self.logit_scale
 
-        loss = None
+        weight = [1.0]*logits.shape[-1]
+        weight[50277] = 0.0
+        weight[0] = 0.0
+        weight = torch.tensor(weight).to(torch.device('cuda'))
         if labels is not None:
             _labels = torch.roll(labels, shifts=-1)
             _labels[:, -1] = -100
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), _labels.to(logits.device).view(-1))
-            # loss = F.cross_entropy(logits.view(-1, logits.size(-1)), _labels.to(logits.device).view(-1))
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), _labels.to(logits.device).view(-1), weight=weight)
 
-        # loss_2 = self._cross_entropy(logits.view(-1, logits.size(-1)), _labels.to(logits.device).view(-1))
 
         return CausalLMOutputWithPast(
             loss=loss,
@@ -448,16 +449,6 @@ class MPTForCausalLM(MPTPreTrainedModel):
             attentions=outputs.attentions,
         )
     
-    def _cross_entropy(self, input, label):
-        input = input.to(torch.device('cuda'))
-        label = label.to(torch.device('cuda'))
-        log_probs = F.log_softmax(input, dim=1)
-        one_hot_labels = torch.zeros_like(input)
-        import pdb
-        pdb.set_trace()
-        one_hot_labels.scatter_(1, label.unsqueeze(1), 1)
-        cross_entropy_loss = -(one_hot_labels * log_probs).sum() / input.size(0)
-        return cross_entropy_loss
     
     def param_init_fn(self, module):
         init_fn_name = self.config.init_config["name"]
