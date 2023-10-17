@@ -4,8 +4,8 @@ function terminate() {
   exit
 }
 trap 'terminate' {1,2,3,15}
-export CUDA_LAUNCH_BLOCKING=1
-export TORCH_USE_CUDA_DSA
+CUDA_LAUNCH_BLOCKING=1
+# TORCH_USE_CUDA_DSA
 accelerate launch --config_file=./pipeline/accelerate_configs/accelerate_config_fsdp.yaml \
 pipeline/train/instruction_following.py \
 --pretrained_model_name_or_path="./weights/OTTER-Image-MPT7B" \

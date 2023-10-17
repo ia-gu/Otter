@@ -151,7 +151,8 @@ class MimicitDataset(Dataset):
                 cache_train_list = cache_train_list[: int(len(cache_train_list) * args.past_subset_ration)]
             if self.train_data_list == []:
                 # HACK
-                self.train_data_list = cache_train_list[:100] # ??
+                # self.train_data_list = cache_train_list[:100] # ??
+                self.train_data_list = cache_train_list[:] # ??
                 self.train_config = cache_train_config
             else:
                 self.train_data_list += cache_train_list[:10000] # ??

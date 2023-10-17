@@ -106,6 +106,7 @@ ipython_config.py
 
 # Project specific
 output/
+cleaning_data/
 debug*/
 wandb/
 result_mat/

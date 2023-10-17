@@ -397,7 +397,8 @@ class MPTForCausalLM(MPTPreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         use_cache: Optional[bool] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
-        tokenizer = None
+        tokenizer = None,
+        accelerator=None
     ):
         return_dict = return_dict if return_dict is not None else self.config.return_dict
         use_cache = use_cache if use_cache is not None else self.config.use_cache
@@ -434,12 +435,10 @@ class MPTForCausalLM(MPTPreTrainedModel):
         if labels is not None:
             _labels = torch.roll(labels, shifts=-1)
             _labels[:, -1] = -100
-            loss = F.cross_entropy(
-                logits.view(-1, logits.size(-1)),
-                _labels.to(logits.device).view(-1),
-            )
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), _labels.to(logits.device).view(-1))
+            # loss = F.cross_entropy(logits.view(-1, logits.size(-1)), _labels.to(logits.device).view(-1))
 
-        # loss_2 = self._cross_entropy(logits.view(-1, logits.size(-1)), _labels.to(logits.device).view(-1), accelerator)
+        # loss_2 = self._cross_entropy(logits.view(-1, logits.size(-1)), _labels.to(logits.device).view(-1))
 
         return CausalLMOutputWithPast(
             loss=loss,
@@ -449,14 +448,15 @@ class MPTForCausalLM(MPTPreTrainedModel):
             attentions=outputs.attentions,
         )
     
-    def _cross_entropy(self, input, label, accelerator):
-        exp_tensor = torch.exp(input)
-        softmax_tensor = exp_tensor / exp_tensor.sum(dim=1, keepdim=True)
+    def _cross_entropy(self, input, label):
+        input = input.to(torch.device('cuda'))
+        label = label.to(torch.device('cuda'))
+        log_probs = F.log_softmax(input, dim=1)
         one_hot_labels = torch.zeros_like(input)
+        import pdb
+        pdb.set_trace()
         one_hot_labels.scatter_(1, label.unsqueeze(1), 1)
-        accelerator.wait_for_everyone()
-        cross_entropy_loss = -(one_hot_labels * torch.log(softmax_tensor)).sum() / input.size(0)
-
+        cross_entropy_loss = -(one_hot_labels * log_probs).sum() / input.size(0)
         return cross_entropy_loss
     
     def param_init_fn(self, module):

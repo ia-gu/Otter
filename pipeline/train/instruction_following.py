@@ -52,8 +52,135 @@ def random_seed(seed=42, rank=0):
     np.random.seed(seed + rank)
     random.seed(seed + rank)
 
+def val_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, lr_scheduler, device_id, accelerator, wandb):
+    print('Validation Called')
+    num_batches_per_epoch = len(mimicit_loaders[0]) # データ数/バッチサイズ
+    total_eval_steps = num_batches_per_epoch * args.num_epochs
 
-def train_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, lr_scheduler, device_id, accelerator, wandb):
+    # special design for Idefics Model's prompt strategy
+    fake_token_image_exists = True if "<fake_token_around_image>" in tokenizer.special_tokens_map["additional_special_tokens"] else False
+    fake_token_image_token_id = tokenizer("<fake_token_around_image>", add_special_tokens=False)["input_ids"][-1]
+
+    # normal prompt strategy
+    media_token_id = tokenizer("<image>", add_special_tokens=False)["input_ids"][-1]
+    endofchunk_text = (
+        "<|endofchunk|>" if "<|endofchunk|>" in tokenizer.special_tokens_map["additional_special_tokens"] else "<end_of_utterance>"
+    )  # for different tokenizer
+    endofchunk_token_id = tokenizer(endofchunk_text, add_special_tokens=False)["input_ids"][-1]
+    answer_token_id = tokenizer("<answer>", add_special_tokens=False)["input_ids"][-1]
+
+    model.eval()
+
+    # setup logging
+    step_time_m = AverageMeter()  # time for one optimizer step (> 1 batch if using gradient accum)
+    data_time_m = AverageMeter()  # avg time to load one batch of both C4 AND laion (= 1 batch regardless of gradient accum)
+    end = time.time()
+    autocast_type = torch.bfloat16 if accelerator.mixed_precision == "bf16" else torch.float32
+
+    # loop through dataloader
+    for num_steps, (batch_mimicits) in tqdm(
+        enumerate(zip(*mimicit_loaders)),
+        disable=args.rank != 0,
+        total=total_eval_steps,
+        initial=(epoch * num_batches_per_epoch),
+    ):
+        data_time_m.update(time.time() - end)
+
+        val_global_step = num_steps + epoch * num_batches_per_epoch
+        # print(val_global_step, '\n')
+        # print(num_steps, '\n')
+        # print(epoch, '\n')
+        # print(num_batches_per_epoch, '\n')
+        #### MIMIC-IT FORWARD PASS ####
+
+        total_losses = []
+        with torch.no_grad():
+            for batch_mimicit in batch_mimicits:
+                images = batch_mimicit["net_input"]["patch_images"].to(device_id, non_blocking=True)
+                input_ids = batch_mimicit["net_input"]["input_ids"].to(device_id, non_blocking=True)
+                attention_mask = batch_mimicit["net_input"]["attention_masks"].to(device_id, non_blocking=True)
+
+                labels = input_ids.clone()
+                labels[labels == tokenizer.pad_token_id] = -100
+                labels[:, 0] = -100
+                for i in range(labels.shape[0]):
+                    # get index of all endofchunk/media tokens in the sequence
+                    endofchunk_idxs = torch.where(labels[i] == endofchunk_token_id)[0]
+                    media_idxs = torch.where(labels[i] == media_token_id)[0]
+
+                    # remove loss for any token the before the first <answer>
+                    token_idx = 0
+                    while token_idx < labels.shape[1] and labels[i][token_idx] != answer_token_id:
+                        labels[i][token_idx] = -100
+                        token_idx += 1
+
+                    # remove loss for any token between <|endofchunk|> and <answer>, except <image>
+                    for endofchunk_idx in endofchunk_idxs[:-1]:
+                        token_idx = endofchunk_idx + 1
+                        while token_idx < labels.shape[1] and labels[i][token_idx] != answer_token_id:
+                            if labels[i][token_idx] == media_token_id:
+                                pass
+                            else:
+                                labels[i][token_idx] = -100
+                            token_idx += 1
+
+                labels[labels == answer_token_id] = -100
+                labels[labels == media_token_id] = -100
+                if fake_token_image_exists:
+                    labels[labels == fake_token_image_token_id] = -100
+
+                with accelerator.autocast():
+                    unwrapped_model = accelerator.unwrap_model(model)
+
+                    if IdeficsForVisionText2Text is not None and isinstance(unwrapped_model, IdeficsForVisionText2Text):
+                        # only for image model
+                        max_num_images = images.shape[1]
+                        pure_text = torch.all(images == 0)
+                        image_attention_mask = get_image_attention_mask(input_ids, max_num_images, tokenizer, include_image=not pure_text)
+                        # assert images.shape[1] == 1, "The second dimension is not 1"
+
+                        loss_mimicit = model(
+                            pixel_values=images.squeeze(1).to(autocast_type),
+                            input_ids=input_ids,
+                            attention_mask=attention_mask,
+                            image_attention_mask=image_attention_mask,
+                            labels=labels,
+                            accelerator=accelerator
+                        )[0]
+                    else:
+                        loss_mimicit = model(
+                            vision_x=images.to(autocast_type),
+                            lang_x=input_ids,
+                            attention_mask=attention_mask,
+                            labels=labels,
+                            accelerator=accelerator
+                        )[0]
+
+                total_losses.append(loss_mimicit)
+        total_loss_sum = sum(total_losses)
+        mean_loss = total_loss_sum / len(total_losses)
+
+        # step time and reset end outside of rank 0
+        step_time_m.update(time.time() - end)
+        end = time.time()
+
+        if accelerator.sync_gradients:
+            if args.rank == 0 and args.report_to_wandb:
+
+                wandb.log(
+                    {
+                        "val_loss_mimicit": mean_loss.item(),
+                        "val_global_step": val_global_step // args.gradient_accumulation_steps,
+                    },
+                    commit=True,
+                )
+
+        # Log loss to console
+        if ((num_steps + 1) % args.logging_steps == 0) and args.rank == 0:
+            print(f"Step {num_steps+1}/{num_batches_per_epoch} of epoch {epoch+1}/{args.num_epochs} complete. Loss MIMIC-IT: {mean_loss.item():.3f}")
+
+
+def train_one_epoch(args, model, epoch, mimicit_loaders, val_mimicit_loaders, tokenizer, optimizer, lr_scheduler, device_id, accelerator, wandb):
     num_batches_per_epoch = len(mimicit_loaders[0]) # データ数/バッチサイズ
     total_training_steps = num_batches_per_epoch * args.num_epochs
 
@@ -70,7 +197,6 @@ def train_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, l
     answer_token_id = tokenizer("<answer>", add_special_tokens=False)["input_ids"][-1]
     ens_token_id = tokenizer(tokenizer.eos_token, add_special_tokens=False)["input_ids"][-1]
 
-    model.train()
 
     # setup logging
     step_time_m = AverageMeter()  # time for one optimizer step (> 1 batch if using gradient accum)
@@ -91,9 +217,27 @@ def train_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, l
 
         #### MIMIC-IT FORWARD PASS ####
         total_losses = []
-        # print("####################################")
-        # print(batch_mimicits.shape)
+
+        if args.val_times_per_epoch>0:
+            if num_steps%(total_training_steps//args.val_times_per_epoch)==0:
+                for cur_data_loader in val_mimicit_loaders:
+                    cur_data_loader.dataset.set_epoch(epoch)
+                val_one_epoch(
+                    args=args,
+                    model=model,
+                    epoch=epoch+num_steps,
+                    tokenizer=tokenizer,
+                    optimizer=optimizer,
+                    lr_scheduler=lr_scheduler,
+                    mimicit_loaders=val_mimicit_loaders,
+                    accelerator=accelerator,
+                    device_id=device_id,
+                    wandb=wandb,
+                )
+                accelerator.wait_for_everyone()
+        model.train()
         for batch_mimicit in batch_mimicits:
+
             images = batch_mimicit["net_input"]["patch_images"].to(device_id, non_blocking=True)
             input_ids = batch_mimicit["net_input"]["input_ids"].to(device_id, non_blocking=True)
             attention_mask = batch_mimicit["net_input"]["attention_masks"].to(device_id, non_blocking=True)
@@ -129,15 +273,6 @@ def train_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, l
 
             with accelerator.autocast():
                 unwrapped_model = accelerator.unwrap_model(model)
-                # if num_steps == 0:
-                #     # info check
-                #     accelerator.print(f"input_ids: {input_ids.shape}")
-                #     accelerator.print(f"images: {images.shape}")
-                #     accelerator.print(f"attention_mask: {attention_mask.shape}")
-                #     accelerator.print(f"labels: {labels.shape}")
-                #     accelerator.print(f"model: {unwrapped_model.__class__.__name__}")
-                #     accelerator.print(f"model dtype: {unwrapped_model.dtype}")
-
                 if IdeficsForVisionText2Text is not None and isinstance(unwrapped_model, IdeficsForVisionText2Text):
                     # only for image model
                     max_num_images = images.shape[1]
@@ -151,7 +286,8 @@ def train_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, l
                         attention_mask=attention_mask,
                         image_attention_mask=image_attention_mask,
                         labels=labels,
-                        tokenizer=tokenizer
+                        tokenizer=tokenizer,
+                        accelerator=accelerator
                     )[0]
                 else:
                     loss_mimicit = model(
@@ -159,7 +295,8 @@ def train_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, l
                         lang_x=input_ids,
                         attention_mask=attention_mask,
                         labels=labels,
-                        tokenizer=tokenizer
+                        tokenizer=tokenizer,
+                        accelerator=accelerator
                     )[0]
             if accelerator.mixed_precision == "fp16":
                 accelerator.backward(loss_mimicit.to(device_id))
@@ -204,22 +341,6 @@ def train_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, l
 
         if accelerator.sync_gradients:
             if args.rank == 0 and args.report_to_wandb:
-                # compute within rank 0
-                # mimicit_samples_per_second = args.gradient_accumulation_steps * args.batch_size * args.world_size / step_time_m.val
-                # mimicit_samples_per_second_per_gpu = args.gradient_accumulation_steps * args.batch_size / step_time_m.val
-
-                # wandb.log(
-                #     {
-                #         "data_time": data_time_m.avg,
-                #         "step_time": step_time_m.avg,
-                #         "mimicit_samples_per_second": mimicit_samples_per_second,
-                #         "mimicit_samples_per_second_per_gpu": mimicit_samples_per_second_per_gpu,
-                #         "lr": optimizer.param_groups[0]["lr"],
-                #     },
-                #     commit=False,
-                # )
-                # step_time_m.reset()
-                # data_time_m.reset()
 
                 wandb.log(
                     {
@@ -246,151 +367,6 @@ def train_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, l
                 if args.delete_previous_checkpoint:
                     if epoch > 0 and os.path.exists(f"{args.external_save_dir}/checkpoint_step_{global_step-args.save_steps_interval}.pt"):
                         os.remove(f"{args.external_save_dir}/checkpoint_step_{global_step-args.save_steps_interval}.pt")
-
-        # Log loss to console
-        if ((num_steps + 1) % args.logging_steps == 0) and args.rank == 0:
-            print(f"Step {num_steps+1}/{num_batches_per_epoch} of epoch {epoch+1}/{args.num_epochs} complete. Loss MIMIC-IT: {mean_loss.item():.3f}")
-
-def val_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, lr_scheduler, device_id, accelerator, wandb):
-    num_batches_per_epoch = len(mimicit_loaders[0]) # データ数/バッチサイズ
-    total_eval_steps = num_batches_per_epoch * args.num_epochs
-
-    # special design for Idefics Model's prompt strategy
-    fake_token_image_exists = True if "<fake_token_around_image>" in tokenizer.special_tokens_map["additional_special_tokens"] else False
-    fake_token_image_token_id = tokenizer("<fake_token_around_image>", add_special_tokens=False)["input_ids"][-1]
-
-    # normal prompt strategy
-    media_token_id = tokenizer("<image>", add_special_tokens=False)["input_ids"][-1]
-    endofchunk_text = (
-        "<|endofchunk|>" if "<|endofchunk|>" in tokenizer.special_tokens_map["additional_special_tokens"] else "<end_of_utterance>"
-    )  # for different tokenizer
-    endofchunk_token_id = tokenizer(endofchunk_text, add_special_tokens=False)["input_ids"][-1]
-    answer_token_id = tokenizer("<answer>", add_special_tokens=False)["input_ids"][-1]
-
-    model.eval()
-
-    # setup logging
-    step_time_m = AverageMeter()  # time for one optimizer step (> 1 batch if using gradient accum)
-    data_time_m = AverageMeter()  # avg time to load one batch of both C4 AND laion (= 1 batch regardless of gradient accum)
-    end = time.time()
-    autocast_type = torch.bfloat16 if accelerator.mixed_precision == "bf16" else torch.float32
-
-    # loop through dataloader
-    for num_steps, (batch_mimicits) in tqdm(
-        enumerate(zip(*mimicit_loaders)),
-        disable=args.rank != 0,
-        total=total_eval_steps,
-        initial=(epoch * num_batches_per_epoch),
-    ):
-        data_time_m.update(time.time() - end)
-
-        val_global_step = num_steps + epoch * num_batches_per_epoch
-        #### MIMIC-IT FORWARD PASS ####
-
-        total_losses = []
-        # print("####################################")
-        # print(batch_mimicits.shape)
-        with torch.no_grad():
-            for batch_mimicit in batch_mimicits:
-                images = batch_mimicit["net_input"]["patch_images"].to(device_id, non_blocking=True)
-                input_ids = batch_mimicit["net_input"]["input_ids"].to(device_id, non_blocking=True)
-                attention_mask = batch_mimicit["net_input"]["attention_masks"].to(device_id, non_blocking=True)
-
-                labels = input_ids.clone()
-                labels[labels == tokenizer.pad_token_id] = -100
-                labels[:, 0] = -100
-                for i in range(labels.shape[0]):
-                    # get index of all endofchunk/media tokens in the sequence
-                    endofchunk_idxs = torch.where(labels[i] == endofchunk_token_id)[0]
-                    media_idxs = torch.where(labels[i] == media_token_id)[0]
-
-                    # remove loss for any token the before the first <answer>
-                    token_idx = 0
-                    while token_idx < labels.shape[1] and labels[i][token_idx] != answer_token_id:
-                        labels[i][token_idx] = -100
-                        token_idx += 1
-
-                    # remove loss for any token between <|endofchunk|> and <answer>, except <image>
-                    for endofchunk_idx in endofchunk_idxs[:-1]:
-                        token_idx = endofchunk_idx + 1
-                        while token_idx < labels.shape[1] and labels[i][token_idx] != answer_token_id:
-                            if labels[i][token_idx] == media_token_id:
-                                pass
-                            else:
-                                labels[i][token_idx] = -100
-                            token_idx += 1
-
-                labels[labels == answer_token_id] = -100
-                labels[labels == media_token_id] = -100
-                if fake_token_image_exists:
-                    labels[labels == fake_token_image_token_id] = -100
-
-                with accelerator.autocast():
-                    unwrapped_model = accelerator.unwrap_model(model)
-                    # if num_steps == 0:
-                    #     # info check
-                    #     accelerator.print(f"input_ids: {input_ids.shape}")
-                    #     accelerator.print(f"images: {images.shape}")
-                    #     accelerator.print(f"attention_mask: {attention_mask.shape}")
-                    #     accelerator.print(f"labels: {labels.shape}")
-                    #     accelerator.print(f"model: {unwrapped_model.__class__.__name__}")
-                    #     accelerator.print(f"model dtype: {unwrapped_model.dtype}")
-
-                    if IdeficsForVisionText2Text is not None and isinstance(unwrapped_model, IdeficsForVisionText2Text):
-                        # only for image model
-                        max_num_images = images.shape[1]
-                        pure_text = torch.all(images == 0)
-                        image_attention_mask = get_image_attention_mask(input_ids, max_num_images, tokenizer, include_image=not pure_text)
-                        # assert images.shape[1] == 1, "The second dimension is not 1"
-
-                        loss_mimicit = model(
-                            pixel_values=images.squeeze(1).to(autocast_type),
-                            input_ids=input_ids,
-                            attention_mask=attention_mask,
-                            image_attention_mask=image_attention_mask,
-                            labels=labels,
-                        )[0]
-                    else:
-                        loss_mimicit = model(
-                            vision_x=images.to(autocast_type),
-                            lang_x=input_ids,
-                            attention_mask=attention_mask,
-                            labels=labels,
-                        )[0]
-
-                total_losses.append(loss_mimicit)
-        total_loss_sum = sum(total_losses)
-        mean_loss = total_loss_sum / len(total_losses)
-
-        # step time and reset end outside of rank 0
-        step_time_m.update(time.time() - end)
-        end = time.time()
-
-        if accelerator.sync_gradients:
-            if args.rank == 0 and args.report_to_wandb:
-                # compute within rank 0
-                # mimicit_samples_per_second = args.gradient_accumulation_steps * args.batch_size * args.world_size / step_time_m.val
-                # mimicit_samples_per_second_per_gpu = args.gradient_accumulation_steps * args.batch_size / step_time_m.val
-
-                # wandb.log(
-                #     {
-                #         "val_data_time": data_time_m.avg,
-                #         "val_step_time": step_time_m.avg,
-                #         "val_mimicit_samples_per_second": mimicit_samples_per_second,
-                #         "val_mimicit_samples_per_second_per_gpu": mimicit_samples_per_second_per_gpu,
-                #     },
-                #     commit=False,
-                # )
-                # step_time_m.reset()
-                # data_time_m.reset()
-
-                wandb.log(
-                    {
-                        "val_loss_mimicit": mean_loss.item(),
-                        "val_global_step": val_global_step // args.gradient_accumulation_steps,
-                    },
-                    commit=True,
-                )
 
         # Log loss to console
         if ((num_steps + 1) % args.logging_steps == 0) and args.rank == 0:
@@ -439,6 +415,7 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--train_num_samples", type=int, default=-1)
     parser.add_argument("--val_num_samples", type=int, default=-1)
+    parser.add_argument("--val_times_per_epoch", type=int, default=10)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--save_steps_interval", type=int, default=-1)
     parser.add_argument("--pretrained_model_name_or_path", type=str, default=None)
@@ -666,6 +643,7 @@ def main():
             optimizer=optimizer,
             lr_scheduler=lr_scheduler,
             mimicit_loaders=mimicit_loaders,
+            val_mimicit_loaders=val_mimicit_loaders,
             accelerator=accelerator,
             device_id=device_id,
             wandb=wandb,
@@ -677,26 +655,26 @@ def main():
         accelerator.wait_for_everyone()
 
         # Validation
-        for cur_data_loader in val_mimicit_loaders:
-            cur_data_loader.dataset.set_epoch(epoch)
-        start = time.time()
-        val_one_epoch(
-            args=args,
-            model=model,
-            epoch=epoch,
-            tokenizer=tokenizer,
-            optimizer=optimizer,
-            lr_scheduler=lr_scheduler,
-            mimicit_loaders=val_mimicit_loaders,
-            accelerator=accelerator,
-            device_id=device_id,
-            wandb=wandb,
-        )
-        end = time.time() - start
-        end_mins = int(end / 60)
-        end_secs = int(end - (end_mins * 60))
-        print(f"Validation Time: {end_mins}m {end_secs}s")
-        accelerator.wait_for_everyone()
+        # for cur_data_loader in val_mimicit_loaders:
+        #     cur_data_loader.dataset.set_epoch(epoch)
+        # start = time.time()
+        # val_one_epoch(
+        #     args=args,
+        #     model=model,
+        #     epoch=epoch,
+        #     tokenizer=tokenizer,
+        #     optimizer=optimizer,
+        #     lr_scheduler=lr_scheduler,
+        #     mimicit_loaders=val_mimicit_loaders,
+        #     accelerator=accelerator,
+        #     device_id=device_id,
+        #     wandb=wandb,
+        # )
+        # end = time.time() - start
+        # end_mins = int(end / 60)
+        # end_secs = int(end - (end_mins * 60))
+        # print(f"Validation Time: {end_mins}m {end_secs}s")
+        # accelerator.wait_for_everyone()
 
         if args.save_ckpt_each_epoch:
             if args.rank == 0:
