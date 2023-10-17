@@ -1,14 +1,12 @@
-""" Main training script """
-
 import argparse
 import glob
 import os
 import random
 import time
-import sys
-
 import numpy as np
-import gc
+import wandb
+import ast
+
 import torch
 import torch.nn
 from accelerate import Accelerator
@@ -19,16 +17,18 @@ from transformers import (
     get_cosine_schedule_with_warmup,
     get_linear_schedule_with_warmup,
 )
+from transformers import AutoProcessor
+import deepspeed
 
-import wandb
 from flamingo.modeling_flamingo import FlamingoForConditionalGeneration
 from otter.modeling_otter import OtterForConditionalGeneration
 from pipeline.train.data import get_data
 from pipeline.train.distributed import world_info_from_env
 from pipeline.train.train_utils import AverageMeter, get_checkpoint, get_image_attention_mask
-from transformers import AutoProcessor
 
-import deepspeed
+
+GLOBAL_STEP = 0
+VAL_GLOBAL_STEP = 0
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -51,9 +51,8 @@ def random_seed(seed=42, rank=0):
     torch.manual_seed(seed + rank)
     np.random.seed(seed + rank)
     random.seed(seed + rank)
-
-def val_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, lr_scheduler, device_id, accelerator, wandb):
-    print('Validation Called')
+def val_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, device_id, accelerator, wandb):
+    global VAL_GLOBAL_STEP
     num_batches_per_epoch = len(mimicit_loaders[0]) # データ数/バッチサイズ
     total_eval_steps = num_batches_per_epoch * args.num_epochs
 
@@ -84,13 +83,9 @@ def val_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, lr_
         total=total_eval_steps,
         initial=(epoch * num_batches_per_epoch),
     ):
+        VAL_GLOBAL_STEP += 1
         data_time_m.update(time.time() - end)
 
-        val_global_step = num_steps + epoch * num_batches_per_epoch
-        # print(val_global_step, '\n')
-        # print(num_steps, '\n')
-        # print(epoch, '\n')
-        # print(num_batches_per_epoch, '\n')
         #### MIMIC-IT FORWARD PASS ####
 
         total_losses = []
@@ -195,17 +190,18 @@ def val_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, lr_
                 wandb.log(
                     {
                         "val_loss_mimicit": mean_loss.item(),
-                        "val_global_step": val_global_step // args.gradient_accumulation_steps,
+                        "VAL_GLOBAL_STEP": VAL_GLOBAL_STEP // args.gradient_accumulation_steps,
                     },
                     commit=True,
                 )
 
         # Log loss to console
         if ((num_steps + 1) % args.logging_steps == 0) and args.rank == 0:
-            print(f"Step {num_steps+1}/{num_batches_per_epoch} of epoch {epoch+1}/{args.num_epochs} complete. Loss MIMIC-IT: {mean_loss.item():.3f}")
+            print(f"{VAL_GLOBAL_STEP}st Validation Step of Epoch {epoch+1}/{args.num_epochs} complete. Loss MIMIC-IT: {mean_loss.item():.3f}")
 
 
 def train_one_epoch(args, model, epoch, mimicit_loaders, val_mimicit_loaders, tokenizer, optimizer, lr_scheduler, device_id, accelerator, wandb):
+    global GLOBAL_STEP
     num_batches_per_epoch = len(mimicit_loaders[0]) # データ数/バッチサイズ
     total_training_steps = num_batches_per_epoch * args.num_epochs
 
@@ -236,10 +232,9 @@ def train_one_epoch(args, model, epoch, mimicit_loaders, val_mimicit_loaders, to
         total=total_training_steps,
         initial=(epoch * num_batches_per_epoch),
     ):
+        GLOBAL_STEP += 1
         data_time_m.update(time.time() - end)
-
-        global_step = num_steps + epoch * num_batches_per_epoch
-
+        
         #### MIMIC-IT FORWARD PASS ####
         total_losses = []
         model.train()
@@ -277,7 +272,7 @@ def train_one_epoch(args, model, epoch, mimicit_loaders, val_mimicit_loaders, to
             labels[labels == media_token_id] = -100
             if fake_token_image_exists:
                 labels[labels == fake_token_image_token_id] = -100
-            # print(labels)
+
             if not args.include_context_loss:
                 def modify_list(lst):
                     sequences = []
@@ -303,7 +298,6 @@ def train_one_epoch(args, model, epoch, mimicit_loaders, val_mimicit_loaders, to
                 
                 for label in labels:
                     modify_list(label)
-                # print(labels)
 
             with accelerator.autocast():
                 unwrapped_model = accelerator.unwrap_model(model)
@@ -313,7 +307,6 @@ def train_one_epoch(args, model, epoch, mimicit_loaders, val_mimicit_loaders, to
                     pure_text = torch.all(images == 0)
                     image_attention_mask = get_image_attention_mask(input_ids, max_num_images, tokenizer, include_image=not pure_text)
                     # assert images.shape[1] == 1, "The second dimension is not 1"
-                    # HACK: loss
                     loss_mimicit = model(
                         pixel_values=images.squeeze(1).to(autocast_type),
                         input_ids=input_ids,
@@ -379,7 +372,7 @@ def train_one_epoch(args, model, epoch, mimicit_loaders, val_mimicit_loaders, to
                 wandb.log(
                     {
                         "loss_mimicit": mean_loss.item(),
-                        "global_step": global_step // args.gradient_accumulation_steps,
+                        "GLOBAL_STEP": GLOBAL_STEP // args.gradient_accumulation_steps,
                     },
                     commit=True,
                 )
@@ -387,36 +380,34 @@ def train_one_epoch(args, model, epoch, mimicit_loaders, val_mimicit_loaders, to
                 # torch.cuda.empty_cache()
                 # gc.collect()  # forces garbage collection
 
-            if args.rank == 0 and global_step != 0 and (args.save_steps_interval != -1) and (global_step % args.save_steps_interval == 0):
+            if args.rank == 0 and GLOBAL_STEP != 0 and (args.save_steps_interval != -1) and (GLOBAL_STEP % args.save_steps_interval == 0):
                 if not os.path.exists(args.external_save_dir):
                     os.makedirs(args.external_save_dir)
 
                 unwrapped_model = accelerator.unwrap_model(model)
                 checkpoint_dict = {
-                    "steps": global_step,
+                    "steps": GLOBAL_STEP,
                     "model_state_dict": get_checkpoint(unwrapped_model),
                 }
-                print(f"Saving checkpoint to {args.external_save_dir}/checkpoint_steps_{global_step}.pt")
-                accelerator.save(checkpoint_dict, f"{args.external_save_dir}/checkpoint_steps_{global_step}.pt")
+                print(f"Saving checkpoint to {args.external_save_dir}/checkpoint_steps_{GLOBAL_STEP}.pt")
+                accelerator.save(checkpoint_dict, f"{args.external_save_dir}/checkpoint_steps_{GLOBAL_STEP}.pt")
                 if args.delete_previous_checkpoint:
-                    if epoch > 0 and os.path.exists(f"{args.external_save_dir}/checkpoint_step_{global_step-args.save_steps_interval}.pt"):
-                        os.remove(f"{args.external_save_dir}/checkpoint_step_{global_step-args.save_steps_interval}.pt")
+                    if epoch > 0 and os.path.exists(f"{args.external_save_dir}/checkpoint_step_{GLOBAL_STEP-args.save_steps_interval}.pt"):
+                        os.remove(f"{args.external_save_dir}/checkpoint_step_{GLOBAL_STEP-args.save_steps_interval}.pt")
 
         # Log loss to console
         if ((num_steps + 1) % args.logging_steps == 0) and args.rank == 0:
             print(f"Step {num_steps+1}/{num_batches_per_epoch} of epoch {epoch+1}/{args.num_epochs} complete. Loss MIMIC-IT: {mean_loss.item():.3f}")
 
-        if args.val_times_per_epoch>0:
-            if num_steps%(total_training_steps//args.val_times_per_epoch)==0:
+        if args.val_times_per_epoch>0 and num_steps>0:
+            if num_steps%(total_training_steps//args.val_times_per_epoch)==0 or num_steps==total_training_steps:
                 for cur_data_loader in val_mimicit_loaders:
                     cur_data_loader.dataset.set_epoch(epoch)
                 val_one_epoch(
                     args=args,
                     model=model,
-                    epoch=epoch+num_steps,
+                    epoch=epoch,
                     tokenizer=tokenizer,
-                    optimizer=optimizer,
-                    lr_scheduler=lr_scheduler,
                     mimicit_loaders=val_mimicit_loaders,
                     accelerator=accelerator,
                     device_id=device_id,
@@ -473,7 +464,7 @@ def parse_args():
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--save_steps_interval", type=int, default=-1)
     parser.add_argument("--pretrained_model_name_or_path", type=str, default=None)
-    parser.add_argument("--include_context_loss", type=bool, default=True)
+    parser.add_argument("--include_context_loss", default=True, type=ast.literal_eval)
     parser.add_argument("--trained_ckpt", type=str, default=None)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--learning_rate", default=1e-4, type=float)
@@ -539,7 +530,6 @@ def main():
         if args.customized_config is not None:
             kwargs["config"] = args.customized_config
         if "otter" in args.model_name.lower():
-            # HACK: loss??
             model = OtterForConditionalGeneration.from_pretrained(
                 args.pretrained_model_name_or_path,
                 **kwargs,
