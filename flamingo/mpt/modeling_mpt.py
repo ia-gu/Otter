@@ -82,13 +82,14 @@ class MPTModel(MPTPreTrainedModel):
                     if config.verbose:
                         warnings.warn(f"Removing bias ({module.bias}) from {module}.")
                     module.register_parameter("bias", None)
-        if config.verbose and config.verbose > 2:
-            print(self)
-        if "verbose" not in self.config.init_config:
-            self.config.init_config["verbose"] = self.config.verbose
-        if self.config.init_config["verbose"] > 1:
-            init_fn_name = self.config.init_config["name"]
-            warnings.warn(f"Using {init_fn_name} initialization.")
+        # if config.verbose and config.verbose > 2:
+        #     print(self)
+        # if "verbose" not in self.config.init_config:
+        #     self.config.init_config["verbose"] = self.config.verbose
+        # if self.config.init_config["verbose"] > 1:
+        #     init_fn_name = self.config.init_config["name"]
+        #     warnings.warn(f"Using {init_fn_name} initialization.")
+        # import pdb; pdb.set_trace()
 
     def get_input_embeddings(self):
         return self.wte
@@ -96,7 +97,7 @@ class MPTModel(MPTPreTrainedModel):
     def set_input_embeddings(self, value):
         self.wte = value
 
-    @torch.no_grad()
+    # @torch.no_grad()
     def _attn_bias(
         self,
         device,
@@ -398,7 +399,7 @@ class MPTForCausalLM(MPTPreTrainedModel):
         use_cache: Optional[bool] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         tokenizer = None,
-        accelerator=None
+        accelerator = None
     ):
         return_dict = return_dict if return_dict is not None else self.config.return_dict
         use_cache = use_cache if use_cache is not None else self.config.use_cache
@@ -430,7 +431,7 @@ class MPTForCausalLM(MPTPreTrainedModel):
             if self.logit_scale == 0:
                 warnings.warn(f"Multiplying logits by {self.logit_scale=}. This will produce uniform (uninformative) outputs.")
             logits *= self.logit_scale
-
+        loss = None
         weight = [1.0]*logits.shape[-1]
         weight[50277] = 0.0
         weight[0] = 0.0

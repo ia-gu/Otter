@@ -25,6 +25,7 @@ pipeline/train/instruction_following.py \
 --learning_rate=1e-5 \
 --warmup_steps_ratio=0.01 \
 --val_times_per_epoch=1 \
+--include_context_loss=False \
 # --report_to_wandb \
 
 # accelerate launch --config_file=./pipeline/accelerate_configs/accelerate_config_fsdp.yaml \

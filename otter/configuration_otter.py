@@ -74,7 +74,6 @@ class OtterConfig(PretrainedConfig):
                 self.text_config = CONFIG_MAPPING[text_config.pop("model_type")](**text_config)
             else:
                 import pdb
-
                 pdb.set_trace()
         else:
             self.text_config = CONFIG_MAPPING[text_config.pop("model_type")](**text_config)
@@ -96,4 +95,5 @@ class OtterConfig(PretrainedConfig):
         output["model_type"] = self.__class__.model_type
         output["cross_attn_every_n_layers"] = self.cross_attn_every_n_layers
         output["use_media_placement_augmentation"] = self.use_media_placement_augmentation
+        # import pdb; pdb.set_trace()
         return output

@@ -1,0 +1,9 @@
+/full_images_train/
+/full_images_val/
+/log/
+/home/
+/data/
+/data_/
+/pyproject.toml/
+/wandb/
+/pipline/demo/

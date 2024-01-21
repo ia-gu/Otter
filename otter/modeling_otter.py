@@ -800,7 +800,6 @@ class OtterForConditionalGeneration(OtterPreTrainedModel):
                 lang_encoder = LlamaForCausalLM(config=config.text_config)
             else:
                 import pdb
-
                 pdb.set_trace()
         else:
             text_tokenizer = LlamaTokenizer.from_pretrained(config.text_config._name_or_path)
@@ -845,6 +844,8 @@ class OtterForConditionalGeneration(OtterPreTrainedModel):
             use_media_placement_augmentation=self.use_media_placement_augmentation,
         )
 
+        config.lora_config = {"r": 4, "lora_alpha": 2, "lora_dropout": 0.1}
+        # if True:
         if "lora_config" in config.__dict__:
             original_architecture_name = self.lang_encoder.__class__.__name__
             print(f"Using LoRA with config:{config.lora_config}")
@@ -865,8 +866,9 @@ class OtterForConditionalGeneration(OtterPreTrainedModel):
                 target_modules=model_to_lora_modules[lang_encoder_short_name],
             )
             self.lang_encoder = get_peft_model(self.lang_encoder, lora_config)
-            self.lang_encoder.print_trainable_parameters()
             self.lang_encoder.__class__.__name__ = f"{original_architecture_name}LoRA"
+            self.lang_encoder.print_trainable_parameters()
+        # import pdb; pdb.set_trace()
         self.post_init()
 
     def get_input_embeddings(self) -> nn.Module:
