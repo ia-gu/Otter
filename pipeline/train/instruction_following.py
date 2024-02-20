@@ -196,8 +196,8 @@ def val_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, device_id, acc
                 )
 
         # Log loss to console
-        if ((num_steps + 1) % args.logging_steps == 0) and args.rank == 0:
-            print(f"{VAL_GLOBAL_STEP}st Validation Step of Epoch {epoch+1}/{args.num_epochs} complete. Loss MIMIC-IT: {mean_loss.item():.3f}")
+        if ((num_steps) % args.logging_steps == 0) and args.rank == 0:
+            print(f"{VAL_GLOBAL_STEP}st Validation Step of Epoch {epoch}/{args.num_epochs} complete. Loss MIMIC-IT: {mean_loss.item():.3f}")
 
 
 def train_one_epoch(args, model, epoch, mimicit_loaders, val_mimicit_loaders, tokenizer, optimizer, lr_scheduler, device_id, accelerator, wandb):

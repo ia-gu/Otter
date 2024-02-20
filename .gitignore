@@ -6,7 +6,8 @@ json/
 __pycache__/
 *$py.class
 *.sage.py
-
+core
+Otter_v2/core
 # Special and Backup files
 *.csv
 *.txt

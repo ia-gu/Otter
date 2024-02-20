@@ -56,8 +56,8 @@ def test_ok(folder, sub_folder, GTs, gt_idx, output_dir):
     #                 <image>User: Is there any evidence of defects like {subfolder_string} in this image of the {folder__}? GPT:<answer>
     # """)
     inputs = textwrap.dedent(f"""
-        <image>User: This is an image of {folder__}. Does this {folder__} have any defects such as {subfolder_string}? GPT:<answer>No. This {folder__} does not have any defects such as {subfolder_string}, so it is non-defective.<|endofchunk|>
-        <image>User: This is an image of {folder__}. Does this {folder__} have any defects such as {subfolder_string}? GPT:<answer>Yes. This {folder__} has some {GTs[gt_idx]}, so it is defective.<|endofchunk|>
+        <image>User: This is an image of {folder__}. Does this {folder__} have any defects such as {subfolder_string}? GPT:<answer> No. This {folder__} does not have any defects such as {subfolder_string}, so it is non-defective.<|endofchunk|>
+        <image>User: This is an image of {folder__}. Does this {folder__} have any defects such as {subfolder_string}? GPT:<answer> Yes. This {folder__} has some {GTs[gt_idx]}, so it is defective.<|endofchunk|>
         <image>User: This is an image of {folder__}. Does this {folder__} have any defects such as {subfolder_string}? GPT:<answer>
     """)
     inputs = "".join(inputs.split("\n"))
@@ -119,14 +119,15 @@ def test_ok(folder, sub_folder, GTs, gt_idx, output_dir):
             writer = csv.writer(f)
             writer.writerow([query_image_path, parsed_output])
     
-    yesno_acc = f"correct: {yesno_count}, total: {len(query_image_paths)-1}, yesno acc: {(yesno_count / (len(query_image_paths)-1)) * 100:.2f}%"
-    
+    yesno_acc = f"{yesno_count}/{len(query_image_paths)-1}"
     write_text_file(f'{folder_name}/{log_name}',f'-----{sub_folder} end-----')
     write_text_file(f'{folder_name}/{log_name}',yesno_acc)
-    print(yesno_acc)
     with open(f'./{output_dir}/result.csv', 'a') as f:
         writer = csv.writer(f)
         writer.writerow([yesno_acc])
+    with open(f'./{output_dir}/only_result.csv', 'a') as f:
+        writer = csv.writer(f)
+        writer.writerow([query_image_path.split('/')[5], query_image_path.split('/')[5], yesno_acc])
 
 def test_ng(folder, sub_folder, GTs, gt_idx, output_dir):
     if folder=="grid":
@@ -156,8 +157,8 @@ def test_ng(folder, sub_folder, GTs, gt_idx, output_dir):
     #                 <image>User: Is there any evidence of defects like {subfolder_string} in this image of the {folder__}? GPT:<answer>
     # """)
     inputs = textwrap.dedent(f"""
-        <image>User: This is an image of {folder__}. Does this {folder__} have any defects such as {subfolder_string}? GPT:<answer>No. This {folder__} does not have any defects such as {subfolder_string}, so it is non-defective.<|endofchunk|>
-        <image>User: This is an image of {folder__}. Does this {folder__} have any defects such as {subfolder_string}? GPT:<answer>Yes. This {folder__} has some {GTs[gt_idx]}, so it is defective.<|endofchunk|>
+        <image>User: This is an image of {folder__}. Does this {folder__} have any defects such as {subfolder_string}? GPT:<answer> No. This {folder__} does not have any defects such as {subfolder_string}, so it is non-defective.<|endofchunk|>
+        <image>User: This is an image of {folder__}. Does this {folder__} have any defects such as {subfolder_string}? GPT:<answer> Yes. This {folder__} has some {GTs[gt_idx]}, so it is defective.<|endofchunk|>
         <image>User: This is an image of {folder__}. Does this {folder__} have any defects such as {subfolder_string}? GPT:<answer>
     """)
     inputs = "".join(inputs.split("\n"))
@@ -227,14 +228,16 @@ def test_ng(folder, sub_folder, GTs, gt_idx, output_dir):
             writer = csv.writer(f)
             writer.writerow([query_image_path, parsed_output])
     
-    yesno_acc = f"correct: {yesno_count}, total: {len(query_image_paths)-1}, yesno acc: {(yesno_count / (len(query_image_paths)-1)) * 100:.2f}%"
-    
+    yesno_acc = f"{yesno_count}/{len(query_image_paths)-1}"
     write_text_file(f'{folder_name}/{log_name}',f'-----{sub_folder} end-----')
     write_text_file(f'{folder_name}/{log_name}',yesno_acc)
-    print(yesno_acc)
     with open(f'./{output_dir}/result.csv', 'a') as f:
         writer = csv.writer(f)
         writer.writerow([yesno_acc])
+    with open(f'./{output_dir}/only_result.csv', 'a') as f:
+        writer = csv.writer(f)
+        writer.writerow([query_image_path.split('/')[5], query_image_path.split('/')[5], yesno_acc])
+
 
 def test_category(folder, sub_folder, output_dir):
     if folder=="grid":
@@ -244,7 +247,6 @@ def test_category(folder, sub_folder, output_dir):
     folder__ = folder__.replace('_', ' ')
 
     # acc = []
-    plus_name = model_name.split("/")[0]
     folder_name = f'./{output_dir}/{folder}/{sub_folder}'
     os.makedirs(folder_name, exist_ok=True)
     log_name = "category_guess.txt"
@@ -306,24 +308,18 @@ def test_category(folder, sub_folder, output_dir):
     
     write_text_file(f'{folder_name}/{log_name}',f'-----{sub_folder} end-----')
     write_text_file(f'{folder_name}/{log_name}',accuracy)
-    with open(f'./{output_dir}/result_category.csv', 'a') as f:
-        writer = csv.writer(f)
-        writer.writerow([accuracy])
 
 
-model_names = ['../../log/prompt_comparison/simple_icl', '../../log/prompt_comparison/various_icl']
-# model_names = ['../../log/prompt_comparison_30e/simple_vi', '../../log/prompt_comparison_30e/various_vi', '../../log/prompt_comparison/simple_vi', '../../log/prompt_comparison/various_vi']
-# output_dirs = ['prompt_comparison_30e/simple_vi', 'prompt_comparison_30e/various_vi', 'prompt_comparison/simple_vi', 'prompt_comparison/various_vi']
-output_dirs = ['prompt_comparison_icl/simple', 'prompt_comparison_icl/various']
+model_names = ['../../log/prompt_comparison/various_20fix/final_weights.pt', '../../log/prompt_comparison/various_20fix_rand/final_weights.pt']
+output_dirs = ['prompt_comparison_icl/various_20fix', 'prompt_comparison_icl/various_20fix_rand']
 for id in range(len(model_names)):
     # load weight
-    model_name = model_names[id]
-    trained_ckpt_path = f'{model_name}/final_weights.pt'
+    trained_ckpt_path = model_names[id]
     train_ckpt = torch.load(trained_ckpt_path, map_location="cpu")
     # model.load_state_dict(train_ckpt, strict=True)
     if train_ckpt.get("model_state_dict", None) is not None:
         train_ckpt = train_ckpt["model_state_dict"]
-        _ = model.load_state_dict(train_ckpt, strict=False)
+    _ = model.load_state_dict(train_ckpt, strict=False)
 
     # log save path
     output_dir = output_dirs[id]
@@ -331,6 +327,8 @@ for id in range(len(model_names)):
     with open(f'./{output_dir}/result.csv', 'w') as f:
         pass
     with open(f'./{output_dir}/result_category.csv', 'w') as f:
+        pass
+    with open(f'./{output_dir}/only_result.csv', 'w') as f:
         pass
     # output_dir = "vi_full_simple"
 
@@ -346,9 +344,9 @@ for id in range(len(model_names)):
     test_ng(folder, ngs[2], GTs, 0, output_dir)
     test_ok(folder, ngs[3], GTs, 2, output_dir)
     test_ng(folder, ngs[3], GTs, 2, output_dir)
-    test_category(folder, 'good', output_dir)
-    for ng in ngs:
-        test_category(folder, ng, output_dir)
+    # test_category(folder, 'good', output_dir)
+    # for ng in ngs:
+    #     test_category(folder, ng, output_dir)
 
     folder = "bottle"
     ngs = ["broken_large","broken_small","contamination"]
@@ -360,9 +358,9 @@ for id in range(len(model_names)):
     test_ng(folder, ngs[1], GTs, 0, output_dir)
     test_ok(folder, ngs[2], GTs, 1, output_dir)
     test_ng(folder, ngs[2], GTs, 1, output_dir)
-    test_category(folder, 'good', output_dir)
-    for ng in ngs:
-        test_category(folder, ng, output_dir)
+    # test_category(folder, 'good', output_dir)
+    # for ng in ngs:
+    #     test_category(folder, ng, output_dir)
 
     folder = "cable"
     ngs = ["bent_wire","cable_swap","cut_inner_insulation","cut_outer_insulation","missing_cable","missing_wire","poke_insulation"]
@@ -382,9 +380,9 @@ for id in range(len(model_names)):
     test_ng(folder, ngs[5], GTs, 3, output_dir)
     test_ok(folder, ngs[6], GTs, 4, output_dir)
     test_ng(folder, ngs[6], GTs, 4, output_dir)
-    test_category(folder, 'good', output_dir)
-    for ng in ngs:
-        test_category(folder, ng, output_dir)
+    # test_category(folder, 'good', output_dir)
+    # for ng in ngs:
+    #     test_category(folder, ng, output_dir)
 
     folder = "capsule"
     ngs = ["crack","faulty_imprint","poke","scratch","squeeze"]
@@ -400,9 +398,9 @@ for id in range(len(model_names)):
     test_ng(folder, ngs[3], GTs, 3, output_dir)
     test_ok(folder, ngs[4], GTs, 4, output_dir)
     test_ng(folder, ngs[4], GTs, 4, output_dir)
-    test_category(folder, 'good', output_dir)
-    for ng in ngs:
-        test_category(folder, ng, output_dir)
+    # test_category(folder, 'good', output_dir)
+    # for ng in ngs:
+    #     test_category(folder, ng, output_dir)
 
     folder = "carpet"
     ngs = ["color","cut","hole","metal_contamination","thread"]
@@ -418,9 +416,9 @@ for id in range(len(model_names)):
     test_ng(folder, ngs[3], GTs, 3, output_dir)
     test_ok(folder, ngs[4], GTs, 3, output_dir)
     test_ng(folder, ngs[4], GTs, 3, output_dir)
-    test_category(folder, 'good', output_dir)
-    for ng in ngs:
-        test_category(folder, ng, output_dir)
+    # test_category(folder, 'good', output_dir)
+    # for ng in ngs:
+    #     test_category(folder, ng, output_dir)
 
     folder = "grid"
     ngs = ["bent","broken","glue","metal_contamination","thread"]
@@ -436,9 +434,9 @@ for id in range(len(model_names)):
     test_ng(folder, ngs[3], GTs, 2, output_dir)
     test_ok(folder, ngs[4], GTs, 2, output_dir)
     test_ng(folder, ngs[4], GTs, 2, output_dir)
-    test_category(folder, 'good', output_dir)
-    for ng in ngs:
-        test_category(folder, ng, output_dir)
+    # test_category(folder, 'good', output_dir)
+    # for ng in ngs:
+    #     test_category(folder, ng, output_dir)
 
     folder = "hazelnut"
     ngs = ["crack","cut","hole","print"]
@@ -452,9 +450,9 @@ for id in range(len(model_names)):
     test_ng(folder, ngs[2], GTs, 2, output_dir)
     test_ok(folder, ngs[3], GTs, 3, output_dir)
     test_ng(folder, ngs[3], GTs, 3, output_dir)
-    test_category(folder, 'good', output_dir)
-    for ng in ngs:
-        test_category(folder, ng, output_dir)
+    # test_category(folder, 'good', output_dir)
+    # for ng in ngs:
+    #     test_category(folder, ng, output_dir)
 
     folder = "leather"
     ngs = ["color","cut","fold","glue","poke"]
@@ -470,9 +468,9 @@ for id in range(len(model_names)):
     test_ng(folder, ngs[3], GTs, 0, output_dir)
     test_ok(folder, ngs[4], GTs, 3, output_dir)
     test_ng(folder, ngs[4], GTs, 3, output_dir)
-    test_category(folder, 'good', output_dir)
-    for ng in ngs:
-        test_category(folder, ng, output_dir)
+    # test_category(folder, 'good', output_dir)
+    # for ng in ngs:
+    #     test_category(folder, ng, output_dir)
 
     folder = "metal_nut"
     ngs = ["bent","color","flip","scratch"]
@@ -486,9 +484,9 @@ for id in range(len(model_names)):
     test_ng(folder, ngs[2], GTs, 2, output_dir)
     test_ok(folder, ngs[3], GTs, 3, output_dir)
     test_ng(folder, ngs[3], GTs, 3, output_dir)
-    test_category(folder, 'good', output_dir)
-    for ng in ngs:
-        test_category(folder, ng, output_dir)
+    # test_category(folder, 'good', output_dir)
+    # for ng in ngs:
+    #     test_category(folder, ng, output_dir)
 
     folder = "pill"
     ngs = ["color","contamination","crack","faulty_imprint","scratch","pill_type"]
@@ -506,9 +504,9 @@ for id in range(len(model_names)):
     test_ng(folder, ngs[4], GTs, 4, output_dir)
     test_ok(folder, ngs[5], GTs, 0, output_dir)
     test_ng(folder, ngs[5], GTs, 0, output_dir)
-    test_category(folder, 'good', output_dir)
-    for ng in ngs:
-        test_category(folder, ng, output_dir)
+    # test_category(folder, 'good', output_dir)
+    # for ng in ngs:
+    #     test_category(folder, ng, output_dir)
 
     folder = "screw"
     ngs = ["manipulated_front","scratch_head","scratch_neck","thread_side","thread_top"]
@@ -524,9 +522,9 @@ for id in range(len(model_names)):
     test_ng(folder, ngs[3], GTs, 1, output_dir)
     test_ok(folder, ngs[4], GTs, 1, output_dir)
     test_ng(folder, ngs[4], GTs, 1, output_dir)
-    test_category(folder, 'good', output_dir)
-    for ng in ngs:
-        test_category(folder, ng, output_dir)
+    # test_category(folder, 'good', output_dir)
+    # for ng in ngs:
+    #     test_category(folder, ng, output_dir)
 
     folder = "tile"
     ngs = ["crack","glue_strip","gray_stroke","oil","rough"]
@@ -542,9 +540,9 @@ for id in range(len(model_names)):
     test_ng(folder, ngs[3], GTs, 2, output_dir)
     test_ok(folder, ngs[4], GTs, 2, output_dir)
     test_ng(folder, ngs[4], GTs, 2, output_dir)
-    test_category(folder, 'good', output_dir)
-    for ng in ngs:
-        test_category(folder, ng, output_dir)
+    # test_category(folder, 'good', output_dir)
+    # for ng in ngs:
+    #     test_category(folder, ng, output_dir)
 
     folder = "toothbrush"
     ngs = ["defective"]
@@ -565,9 +563,9 @@ for id in range(len(model_names)):
     test_ng(folder, ngs[2], GTs, 2, output_dir)
     test_ok(folder, ngs[3], GTs, 3, output_dir)
     test_ng(folder, ngs[3], GTs, 3, output_dir)
-    test_category(folder, 'good', output_dir)
-    for ng in ngs:
-        test_category(folder, ng, output_dir)
+    # test_category(folder, 'good', output_dir)
+    # for ng in ngs:
+    #     test_category(folder, ng, output_dir)
 
     folder = "zipper"
     ngs = ["broken_teeth","fabric_border","fabric_interior","rough","split_teeth","squeezed_teeth"]
@@ -585,6 +583,6 @@ for id in range(len(model_names)):
     test_ng(folder, ngs[4], GTs, 3, output_dir)
     test_ok(folder, ngs[5], GTs, 3, output_dir)
     test_ng(folder, ngs[5], GTs, 3, output_dir)
-    test_category(folder, 'good', output_dir)
-    for ng in ngs:
-        test_category(folder, ng, output_dir)
+    # test_category(folder, 'good', output_dir)
+    # for ng in ngs:
+    #     test_category(folder, ng, output_dir)

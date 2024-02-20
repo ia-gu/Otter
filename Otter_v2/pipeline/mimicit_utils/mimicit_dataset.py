@@ -5,6 +5,7 @@
 import random
 import base64
 from io import BytesIO
+import ast
 import re
 import contextlib
 import os
@@ -303,16 +304,16 @@ class MimicitDataset(Dataset):
                     patch_images = cur_patch_image
                 else:
                     patch_images = torch.cat((patch_images, cur_patch_image))
+
                 # HACK: 複数のプロンプトからランダムに1つを決定して用いる場合
-                try:
-                    cur_instruction = self.pre_question(cur_instruction[random.randint(0, 19)])
-                except:
-                    cur_instruction = self.pre_question(cur_instruction)
+                if not isinstance(cur_instruction, str):
+                    cur_instruction = self.pre_question(cur_instruction[random.randint(0, len(cur_instruction)-1)])
+                    cur_answer = self.pre_answer(cur_answer[random.randint(0, len(cur_answer)-1)])
                 # HACK: jsonで定義された一つのプロンプトを用いる場合
-                try:
-                    cur_answer = self.pre_answer(cur_answer[random.randint(0, 19)])
-                except:
+                else:
+                    cur_instruction = self.pre_question(cur_instruction)
                     cur_answer = self.pre_answer(cur_answer)
+
                 if inst_format == "llama2":
                     cur_text = f"[INST]{self.wrap_sys}<image>{cur_instruction}[/INST]<answer>{cur_answer}<|endofchunk|>"
                 elif inst_format == "idefics":

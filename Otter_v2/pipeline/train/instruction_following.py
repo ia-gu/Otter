@@ -95,6 +95,8 @@ def train_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, l
             attention_mask = batch_mimicit["net_input"]["attention_masks"].to(device_id, non_blocking=True)
 
             labels = input_ids.clone()
+            # accelerator.print(batch_mimicit["net_input"]["input_ids"])
+            # accelerator.print(labels)
             labels[labels == tokenizer.pad_token_id] = -100
             labels[:, 0] = -100
             for i in range(labels.shape[0]):
@@ -133,7 +135,6 @@ def train_one_epoch(args, model, epoch, mimicit_loaders, tokenizer, optimizer, l
                     accelerator.print(f"labels: {labels.shape}")
                     accelerator.print(f"model: {unwrapped_model.__class__.__name__}")
                     accelerator.print(f"model dtype: {unwrapped_model.dtype}")
-
                 if IdeficsForVisionText2Text is not None and isinstance(unwrapped_model, IdeficsForVisionText2Text):
                     # only for image model
                     max_num_images = images.shape[1]
@@ -536,6 +537,10 @@ def parse_args():
         action="store_true",
         help="delete previous checkpoint when saving new checkpoint",
     )
+    parser.add_argument(
+        "--save_weight_epoch",
+        default=5
+    )
     # parser = add_data_args(parser)
     args = parser.parse_args()
 
@@ -753,7 +758,8 @@ def main():
         print(f"1 Epoch Time: {int(hours)}hours {int(minutes)}minutes")
         accelerator.wait_for_everyone()
 
-        if args.save_ckpt_each_epoch:
+        if epoch % args.save_weight_epoch == 0:
+        # if args.save_ckpt_each_epoch:
             if args.rank == 0:
                 if not os.path.exists(args.external_save_dir):
                     os.makedirs(args.external_save_dir)
@@ -782,13 +788,13 @@ def main():
                     }
 
             if args.rank == 0:
-                print(f"Saving checkpoint to {args.external_save_dir}/checkpoint_{epoch}.pt")
-                accelerator.save(checkpoint_dict, f"{args.external_save_dir}/checkpoint_{epoch}.pt")
+                print(f"Saving checkpoint to {args.external_save_dir}/checkpoint_{epoch+1}.pt")
+                accelerator.save(checkpoint_dict, f"{args.external_save_dir}/checkpoint_{epoch+1}.pt")
                 # save the config
                 unwrapped_model.config.save_pretrained(args.external_save_dir)
                 if args.delete_previous_checkpoint:
                     if epoch > 0:
-                        os.remove(f"{args.external_save_dir}/checkpoint_{epoch-1}.pt")
+                        os.remove(f"{args.external_save_dir}/checkpoint_{epoch}.pt")
 
             accelerator.wait_for_everyone()
 

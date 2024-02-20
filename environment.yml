@@ -1,4 +1,4 @@
-name: otter
+name: h100
 channels:
   - defaults
 dependencies:
