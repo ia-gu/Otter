@@ -1,5 +1,3 @@
-# jsonミスってたのでやり直し
-#/bin/bash
 export PYTHONPATH=.
 function terminate() {
   exit
@@ -24,3 +22,6 @@ pipeline/train/instruction_following.py \
 --learning_rate=1e-5 \
 --warmup_steps_ratio=0.01 \
 --report_to_wandb \
+
+cd pipeline/demo
+python eval95.py

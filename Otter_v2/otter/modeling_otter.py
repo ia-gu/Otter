@@ -164,6 +164,7 @@ class OtterPerceiverBlock(nn.Module):
         v = rearrange(v, "b t n (h d) -> b h t n d", h=h)
         q = q * self.scale
 
+        # HACK attention map
         # attention
         sim = torch.einsum("... i d, ... j d  -> ... i j", q, k)
         sim = sim - sim.amax(dim=-1, keepdim=True).detach()
