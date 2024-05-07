@@ -1,8 +1,10 @@
 core
-pipeline/damo/
+*.csv
 *.ipynb
 *.sh
 *.txt
+*.json
+pipeline/demo/
 weights/
 log/
 wandb/
