@@ -1,7 +1,8 @@
 core
-pipeline/damo
+pipeline/damo/
 *.ipynb
 *.sh
 *.txt
 weights/
 log/
+wandb/
