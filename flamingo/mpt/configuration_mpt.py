@@ -129,7 +129,6 @@ class MPTConfig(PretrainedConfig):
             del kwargs["loss_fn"]
         super().__init__(**kwargs)
         self._validate_config()
-        # import pdb; pdb.set_trace()
 
     def _set_config_defaults(self, config, config_defaults):
         for k, v in config_defaults.items():

@@ -1,0 +1,38 @@
+wood
+"TPs=16, FPs=0, FNs=2, TNs=0"
+zero devision occurred
+######################################################
+wood
+"TPs=0, FPs=0, FNs=0, TNs=7"
+zero devision occurred
+######################################################
+wood
+"TPs=16, FPs=0, FNs=2, TNs=0"
+zero devision occurred
+######################################################
+wood
+"TPs=0, FPs=0, FNs=0, TNs=20"
+zero devision occurred
+######################################################
+wood
+"TPs=16, FPs=0, FNs=2, TNs=0"
+zero devision occurred
+######################################################
+wood
+"TPs=0, FPs=0, FNs=0, TNs=9"
+zero devision occurred
+######################################################
+wood
+"TPs=16, FPs=0, FNs=2, TNs=0"
+zero devision occurred
+######################################################
+wood
+"TPs=1439, FPs=404, FNs=700, TNs=694"
+MCC: 0.29142789494145704
+F1 score: 0.7227523857358111
+######################################################
+FULL F1 SCORE
+"Full_TPs=1503, Full_FPs=404, Full_FNs=708, Full_TNs=730"
+"correct=2233, total=3345"
+MCC: 0.30934974875302623
+F1 score: 0.7299660029140359

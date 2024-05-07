@@ -16,11 +16,8 @@ from flamingo.mpt_redpajama.mosaic_gpt import MosaicGPT
 from transformers.models.auto import AutoModel, AutoModelForCausalLM, AutoTokenizer
 from peft import get_peft_model, LoraConfig, TaskType
 
-import os
 import sys
 import random
-import numpy as np
-import csv
 
 # The package importlib_metadata is in a different place, depending on the python version.
 if sys.version_info < (3, 8):
@@ -167,6 +164,7 @@ class OtterPerceiverBlock(nn.Module):
         v = rearrange(v, "b t n (h d) -> b h t n d", h=h)
         q = q * self.scale
 
+        # HACK attention map
         # attention
         sim = torch.einsum("... i d, ... j d  -> ... i j", q, k)
         sim = sim - sim.amax(dim=-1, keepdim=True).detach()
@@ -206,21 +204,6 @@ class OtterPerceiverResampler(nn.Module):
             self.layers.append(OtterPerceiverBlock(dim=dim, dim_head=dim_head, heads=heads, mult=ff_mult))
 
         self.norm = nn.LayerNorm(dim)
-        self.hook_counter = 0
-        self.hook_norm = np.array([])
-        os.makedirs('result_mat', exist_ok=True)
-        with open('result_mat/perceiver_resampler.csv', '+a') as f: pass
-        def hook_fn(module, grad_input, grad_output):
-            self.hook_counter += 1
-            if self.hook_counter >= 10:
-                for i in module.parameters():
-                    self.hook_norm = np.append(self.hook_norm, (grad_output[0].norm().item())/i.numel())
-                with open('result_mat/perceiver_resampler.csv', '+a') as f:
-                    writer = csv.writer(f)
-                    writer.writerow([np.sum(self.hook_norm)])
-                self.hook_counter = 0
-                self.hook_norm = np.array([])
-        self.norm.register_full_backward_hook(hook_fn)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -270,7 +253,6 @@ class OtterMaskedCrossAttention(nn.Module):
 
         # whether for text to only attend to immediate preceding image, or all previous images
         self.only_attend_immediate_media = only_attend_immediate_media
-        self.norm = nn.LayerNorm(dim)
 
     def forward(
         self,
@@ -382,25 +364,6 @@ class OtterGatedCrossAttentionBlock(nn.Module):
             ]
         )
         self.ff_gate = nn.Parameter(torch.tensor([0.0]))
-
-        self.hook_counter = 0
-        self.hook_norm = np.array([])
-        self.hook_norm_all = np.array([])
-        with open('result_mat/gated_cross_attn.csv', 'w') as f: pass
-        def hook_fn(module, grad_input, grad_output):
-            self.hook_counter += 1
-            if self.hook_counter >= 10:
-                for i in module.parameters():
-                    self.hook_norm = np.append(self.hook_norm, (grad_output[0].norm().item())/i.numel())
-                self.hook_norm_all = np.append(self.hook_norm_all, np.sum(self.hook_norm))
-                self.hook_counter = 0
-                self.hook_norm = np.array([])
-                if len(self.hook_norm_all>=8):
-                    with open('result_mat/gated_cross_attn.csv', '+a') as f:
-                        writer = csv.writer(f)
-                        writer.writerow([np.sum(self.hook_norm_all)])                
-                    self.hook_norm_all = np.array([])
-        self.attn.register_full_backward_hook(hook_fn)
 
     def forward(
         self,
@@ -783,23 +746,29 @@ class OtterForConditionalGeneration(OtterPreTrainedModel):
         self,
         config: OtterConfig,
     ):
+        print('#################################LLM#################################')
         super().__init__(config)
         ### TODO: give "LlamaForCausalLM" as the name of text_config.architectures of Llama_based flamingo
         if "llama" not in config.text_config._name_or_path:
             if config.text_config.architectures[0] == "MPTForCausalLM":
+                print('MPTForCausalLM')
                 text_tokenizer = AutoTokenizer.from_pretrained("mosaicml/mpt-7b-instruct")
                 lang_encoder = MPTForCausalLM(config=config.text_config)
             elif config.text_config.architectures[0] == "MosaicGPT":
+                print('MosaicGPT')
                 text_tokenizer = AutoTokenizer.from_pretrained("mosaicml/mosaic-llama-redpajama-final-candidate")
                 lang_encoder = MosaicGPT(config=config.text_config)
             elif config.text_config.architectures[0] == "RWForCausalLM":
+                print('RWForCausalLM')
                 text_tokenizer = AutoTokenizer.from_pretrained("PATH-TO-YOUR-FALCON")
                 lang_encoder = RWForCausalLM(config=config.text_config)
             elif config.text_config.architectures[0] == "LlamaForCausalLM":
+                print('LlamaForCausalLM')
                 text_tokenizer = LlamaTokenizer.from_pretrained(config.text_config._name_or_path)
                 lang_encoder = LlamaForCausalLM(config=config.text_config)
             else:
                 import pdb
+
                 pdb.set_trace()
         else:
             text_tokenizer = LlamaTokenizer.from_pretrained(config.text_config._name_or_path)
@@ -844,8 +813,6 @@ class OtterForConditionalGeneration(OtterPreTrainedModel):
             use_media_placement_augmentation=self.use_media_placement_augmentation,
         )
 
-        config.lora_config = {"r": 4, "lora_alpha": 2, "lora_dropout": 0.1}
-        # if True:
         if "lora_config" in config.__dict__:
             original_architecture_name = self.lang_encoder.__class__.__name__
             print(f"Using LoRA with config:{config.lora_config}")
@@ -866,9 +833,9 @@ class OtterForConditionalGeneration(OtterPreTrainedModel):
                 target_modules=model_to_lora_modules[lang_encoder_short_name],
             )
             self.lang_encoder = get_peft_model(self.lang_encoder, lora_config)
-            self.lang_encoder.__class__.__name__ = f"{original_architecture_name}LoRA"
             self.lang_encoder.print_trainable_parameters()
-        # import pdb; pdb.set_trace()
+            self.lang_encoder.__class__.__name__ = f"{original_architecture_name}LoRA"
+
         self.post_init()
 
     def get_input_embeddings(self) -> nn.Module:
@@ -904,18 +871,47 @@ class OtterForConditionalGeneration(OtterPreTrainedModel):
             for name, param in self.lang_encoder.named_parameters():
                 param.requires_grad = True
 
+        # self.config.lora_config = {"r": 8, "lora_alpha": 32, "lora_dropout": 0.1}
         if "lora_config" in self.config.__dict__:
-            # Use another logic to unfreeze gated_cross_attn_layers and perceivers
-            print(f"LoRA trainable param: {(sum(param.numel() for name, param in self.lang_encoder.named_parameters() if 'lora' in name)) / 1e6:.3f} M")
-            for name, param in self.lang_encoder.named_parameters():
-                if "lora" in name:
-                    param.requires_grad = True
+            original_architecture_name = self.lang_encoder.__class__.__name__
+            print(f"Using LoRA with config:{self.config.lora_config}")
+            standard_modules = ["q_proj", "v_proj"]
+            lang_encoder_short_name = MODEL_CLASSES[self.config.text_config.architectures[0]]
+            model_to_lora_modules = {
+                "llama": standard_modules,
+                "opt": standard_modules,
+                "gptj": standard_modules,
+                "gpt_neox": ["query_key_value"],
+                "mpt": ["Wqkv"],
+            }
+            lora_config = LoraConfig(
+                r=self.config.lora_config["r"],
+                lora_alpha=self.config.lora_config["lora_alpha"],
+                lora_dropout=self.config.lora_config["lora_dropout"],
+                task_type=TaskType.CAUSAL_LM,
+                target_modules=model_to_lora_modules[lang_encoder_short_name],
+            )
+            self.lang_encoder = get_peft_model(self.lang_encoder, lora_config)
+            self.lang_encoder.__class__.__name__ = f"{original_architecture_name}LoRA"
+            self.lang_encoder.print_trainable_parameters()
+
+        # if "lora_config" in self.config.__dict__:
+        #     # Use another logic to unfreeze gated_cross_attn_layers and perceivers
+        #     print(f"LoRA trainable param: {(sum(param.numel() for name, param in self.lang_encoder.named_parameters() if 'lora' in name)) / 1e6:.3f} M")
+        #     for name, param in self.lang_encoder.named_parameters():
+        #         if "lora" in name:
+        #             param.requires_grad = True
 
         # Freeze all parameters in lang encoders except gated_cross_attn_layers
         for name, param in self.lang_encoder.named_parameters():
             if "gated_cross_attn_layer" in name:
                 param.requires_grad = True
-
+            # HACK: FT ffn or not
+            # if "ffn" in name:
+            #     param.requires_grad = True
+            # if name == "transformer.blocks.31.decoder_layer.ffn.up_proj.weight" or name == "transformer.blocks.31.decoder_layer.ffn.down_proj.weight":
+            #     param.requires_grad = True
+            #     print('Put final ffn training mode')
         for name, param in self.named_parameters():
             if "perceiver" in name:
                 param.requires_grad = True
@@ -967,7 +963,6 @@ class OtterForConditionalGeneration(OtterPreTrainedModel):
         """
         assert (vision_x is not None) or use_cached_vision_x, "Must provide either vision_x or use_cached_vision_x to True."
 
-        # False
         if use_cached_vision_x:
             # Case: use cached; vision_x should be cached and other
             # vision-related inputs should not be provided.
@@ -987,7 +982,6 @@ class OtterForConditionalGeneration(OtterPreTrainedModel):
             **kwargs,
         )
 
-        # True
         if clear_conditioned_layers:
             self.lang_encoder.clear_conditioned_layers()
 

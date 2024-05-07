@@ -799,6 +799,9 @@ class FlamingoForConditionalGeneration(FlamingoPreTrainedModel):
         print("====================Model Grad Part====================")
         total_params = 0
         for name, param in self.named_parameters():
+            print('============TRAINING LLM PARAMS===============')
+            print(name)
+            print('==============================================')
             if param.requires_grad:
                 total_params += param.numel()
                 print(f"Parameter: {name}, Size: {param.numel() / 1e6:.6f} M")

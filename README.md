@@ -33,33 +33,6 @@
 ![](https://black.readthedocs.io/en/stable/_static/license.svg)
 ![](https://img.shields.io/badge/code%20style-black-000000.svg)
 
-### はじめに(Get Started)
-```
-# Clone the repository:
-git clone https://github.com/da-yama82/Otter.git
-cd Otter
-
-# Install dependencies: 
-conda deactivate
-conda env create -f environment.yml
-pip install -r requirements_otter.txt
-
-cd pipeline/demo
-Launch otter_image.ipynb
-```
-
-### ファインチューニング
-※wandbのアカウントを作成し、エンティティ、プロジェクトを以下の引数に指定
-```
---wandb_entity=your_entity
---wandb_project=your_project
-```
-pythonプログラムは"./pipeline/train/instruction_following.py"<br>
-バッシュファイルの中身を適宜変更<br>
-```
-bash run_VI.sh
-```
-
 [Project Page](https://otter-ntu.github.io/) | [Otter Paper](https://arxiv.org/abs/2305.03726) | [MIMIC-IT Paper](https://arxiv.org/abs/2306.05425) | [MIMIC-IT Dataset](mimic-it/README.md)
 
 **Video Demo:** [Otter's Conceptual Demo Video](https://www.youtube.com/watch?v=K8o_LKGQJhs) | [Bilibili 哔哩哔哩](https://www.bilibili.com/video/BV1Bo4y1T7SN/?share_source=copy_web&vd_source=477facaaaa60694f67a784f5eaa905ad)

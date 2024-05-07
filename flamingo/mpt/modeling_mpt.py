@@ -82,14 +82,13 @@ class MPTModel(MPTPreTrainedModel):
                     if config.verbose:
                         warnings.warn(f"Removing bias ({module.bias}) from {module}.")
                     module.register_parameter("bias", None)
-        # if config.verbose and config.verbose > 2:
-        #     print(self)
-        # if "verbose" not in self.config.init_config:
-        #     self.config.init_config["verbose"] = self.config.verbose
-        # if self.config.init_config["verbose"] > 1:
-        #     init_fn_name = self.config.init_config["name"]
-        #     warnings.warn(f"Using {init_fn_name} initialization.")
-        # import pdb; pdb.set_trace()
+        if config.verbose and config.verbose > 2:
+            print(self)
+        if "verbose" not in self.config.init_config:
+            self.config.init_config["verbose"] = self.config.verbose
+        if self.config.init_config["verbose"] > 1:
+            init_fn_name = self.config.init_config["name"]
+            warnings.warn(f"Using {init_fn_name} initialization.")
 
     def get_input_embeddings(self):
         return self.wte
@@ -97,7 +96,7 @@ class MPTModel(MPTPreTrainedModel):
     def set_input_embeddings(self, value):
         self.wte = value
 
-    # @torch.no_grad()
+    @torch.no_grad()
     def _attn_bias(
         self,
         device,
@@ -398,8 +397,6 @@ class MPTForCausalLM(MPTPreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         use_cache: Optional[bool] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
-        tokenizer = None,
-        accelerator = None
     ):
         return_dict = return_dict if return_dict is not None else self.config.return_dict
         use_cache = use_cache if use_cache is not None else self.config.use_cache
@@ -431,17 +428,37 @@ class MPTForCausalLM(MPTPreTrainedModel):
             if self.logit_scale == 0:
                 warnings.warn(f"Multiplying logits by {self.logit_scale=}. This will produce uniform (uninformative) outputs.")
             logits *= self.logit_scale
+
         loss = None
-        weight = [1.0]*logits.shape[-1]
-        weight[50277] = 0.0
-        weight[0] = 0.0
-        weight = torch.tensor(weight).to(torch.device('cuda'))
+        # weight = [1.0]*logits.shape[-1]
+        # weight[50277] = 0.2 # <|endofchunk|>
+        # weight[0] = 0.2 # <|endoftext|>
+        # weight[15] = 0.2 # .
+        # weight = torch.tensor(weight).to(torch.device('cuda'))
+        
         if labels is not None:
             _labels = torch.roll(labels, shifts=-1)
             _labels[:, -1] = -100
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), _labels.to(logits.device).view(-1), weight=weight)
-
-
+            loss = F.cross_entropy(
+                logits.view(-1, logits.size(-1)),
+                _labels.to(logits.device).view(-1),
+            )
+            # loss_tmp = F.cross_entropy(
+            #     logits.view(-1, logits.size(-1)),
+            #     _labels.to(logits.device).view(-1),
+            #     weight=weight
+            # )
+        # print(f'{loss=}')
+        # print(f'{loss_tmp=}')
+        # print(_labels[0])
+        # print(_labels.shape)
+        # print(_labels.to(logits.device).view(-1))
+        # print(_labels.to(logits.device).view(-1).shape)
+        # print('########################################')
+        # print(logits)
+        # print(logits.shape)
+        # print(logits.view(-1, logits.size(-1)))
+        # print(logits.view(-1, logits.size(-1)).shape)
         return CausalLMOutputWithPast(
             loss=loss,
             logits=logits,
@@ -449,8 +466,7 @@ class MPTForCausalLM(MPTPreTrainedModel):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
-    
-    
+
     def param_init_fn(self, module):
         init_fn_name = self.config.init_config["name"]
         MODEL_INIT_REGISTRY[init_fn_name](module=module, n_layers=self.config.n_layers, d_model=self.config.d_model, **self.config.init_config)
